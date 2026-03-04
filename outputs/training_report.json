@@ -1,0 +1,30 @@
+{
+  "dataset_total": 32,
+  "train_size": 25,
+  "test_size": 7,
+  "tfidf_model": {
+    "train_size": 25,
+    "cv_folds": 1,
+    "cv_accuracy_mean": null,
+    "cv_accuracy_std": null,
+    "n_classes": 11,
+    "classes": [
+      "__default__",
+      "build_create",
+      "check_valid",
+      "compute",
+      "find_search",
+      "get_fetch",
+      "parse_format",
+      "process_run",
+      "remove",
+      "send_receive",
+      "set_update"
+    ]
+  },
+  "template_model": {
+    "model": "TemplateRankingModel",
+    "fitted": true,
+    "template_bank_size": 51
+  }
+}
