@@ -205,3 +205,12 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+# Large model files and outputs
+outputs/model/
+outputs/training_corpus.*
+outputs/*.csv
+outputs/*.json
+*.safetensors
+*.bin
+*.pt
+*.pth
