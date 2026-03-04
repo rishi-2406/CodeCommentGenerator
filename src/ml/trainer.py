@@ -25,7 +25,7 @@ from .tfidf_model import TFIDFCommentModel
 from .seq2seq_model import TemplateRankingModel
 from .model_selector import ModelSelector
 from .evaluator import evaluate_dataset, EvalReport
-from .corpus_builder import build_full_corpus, CorpusEntry
+from .corpus_builder import build_full_corpus, CorpusEntry, save_corpus
 
 
 def _split_dataset(dataset: Dataset, test_ratio: float = 0.2, seed: int = 42):
@@ -91,10 +91,15 @@ def train_and_evaluate(
     full_corpus = build_full_corpus(
         include_stdlib=True,
         include_packages=True,
+        include_codesearchnet=True,
         verbose=verbose,
     )
     train_corpus, test_corpus = _split_corpus(full_corpus, test_ratio=test_ratio)
     _log(f"  Corpus — train: {len(train_corpus)}  test: {len(test_corpus)}")
+
+    # Save corpus to disk for inspection
+    corpus_info = save_corpus(full_corpus, output_dir=output_dir, base_name="training_corpus")
+    _log(f"  Corpus saved: {corpus_info['total_samples']} samples → {corpus_info['json_path']}")
 
     # ── 3. Train TFIDFCommentModel ────────────────────────────────────────────
     _log("Training TF-IDF + Logistic Regression model …")

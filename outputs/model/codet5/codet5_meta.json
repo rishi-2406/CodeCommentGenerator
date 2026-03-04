@@ -1,0 +1,9 @@
+{
+  "fine_tuned": true,
+  "loss_history": [
+    3.5539600264884736,
+    2.3968417338231807,
+    1.6378365163746558
+  ],
+  "model_name": "Salesforce/codet5-small"
+}

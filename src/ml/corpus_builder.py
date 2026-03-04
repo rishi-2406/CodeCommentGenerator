@@ -34,7 +34,13 @@ class CorpusEntry:
 def _build_signature(node: ast.FunctionDef) -> str:
     """Reconstruct a clean one-line function signature from an AST node."""
     try:
-        return f"def {ast.unparse(node)}".split(":")[0].strip() + ":"
+        # ast.unparse on a FunctionDef already gives "def foo(args) -> ret:\n    ..."
+        # We only want the first line (the signature) up to and including ":"
+        unparsed = ast.unparse(node)
+        sig_line = unparsed.splitlines()[0].strip()
+        if not sig_line.endswith(":"):
+            sig_line += ":"
+        return sig_line
     except Exception:
         pass
     # Fallback: manual reconstruction
@@ -226,16 +232,24 @@ def build_package_corpus(packages: Optional[List[str]] = None,
 def build_full_corpus(
     include_stdlib: bool = True,
     include_packages: bool = True,
+    include_codesearchnet: bool = True,
     max_stdlib_files: int = 150,
     max_files_per_pkg: int = 30,
+    codesearchnet_split: str = "train",
+    codesearchnet_max: int = 5000,
     deduplicate: bool = True,
     verbose: bool = True,
 ) -> List[CorpusEntry]:
     """
     Build a full training corpus from all available sources.
 
+    Sources (in order):
+      1. Python standard library
+      2. Installed third-party packages
+      3. CodeSearchNet (HuggingFace) — requires `pip install datasets`
+
     Returns:
-        Deduplicated list of CorpusEntry objects sorted by function name.
+        Deduplicated list of CorpusEntry objects.
     """
     entries: List[CorpusEntry] = []
 
@@ -251,6 +265,14 @@ def build_full_corpus(
             print(f"  [corpus] packages: {len(pkg_entries)} entries")
         entries.extend(pkg_entries)
 
+    if include_codesearchnet:
+        csn_entries = build_codesearchnet_corpus(
+            split=codesearchnet_split, max_samples=codesearchnet_max, verbose=verbose
+        )
+        if verbose:
+            print(f"  [corpus] CodeSearchNet: {len(csn_entries)} entries")
+        entries.extend(csn_entries)
+
     if deduplicate:
         seen = set()
         unique = []
@@ -264,3 +286,173 @@ def build_full_corpus(
     if verbose:
         print(f"  [corpus] total (deduplicated): {len(entries)} entries")
     return entries
+
+
+# ── CodeSearchNet dataset ─────────────────────────────────────────────────────
+
+def build_codesearchnet_corpus(
+    split: str = "train",
+    max_samples: int = 5000,
+    verbose: bool = True,
+) -> List[CorpusEntry]:
+    """
+    Download and extract Python (signature, docstring) pairs from CodeSearchNet
+    via Hugging Face `datasets`.
+
+    The dataset has 412,000 Python functions with docstrings. We take a random
+    sample of `max_samples` and format them as CodeT5 input/output pairs.
+
+    Args:
+        split:       Dataset split to use: "train", "validation", or "test".
+        max_samples: Maximum number of entries to extract (default 5000).
+        verbose:     Print progress messages.
+
+    Returns:
+        List of CorpusEntry objects.
+
+    Raises:
+        ImportError: If the `datasets` package is not installed.
+    """
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        if verbose:
+            print("  [corpus] datasets not installed — skipping CodeSearchNet")
+        return []
+
+    if verbose:
+        print(f"  [corpus] Downloading CodeSearchNet Python ({split}) …")
+
+    try:
+        ds = load_dataset(
+            "code_search_net", "python",
+            split=split,
+            trust_remote_code=True,
+        )
+    except Exception as e:
+        if verbose:
+            print(f"  [corpus] CodeSearchNet download failed: {e}")
+        return []
+
+    entries = []
+    # Shuffle with a fixed seed for reproducibility
+    import random as _rnd
+    indices = list(range(len(ds)))
+    _rnd.Random(42).shuffle(indices)
+
+    for idx in indices:
+        if len(entries) >= max_samples:
+            break
+        row = ds[idx]
+        func_name  = row.get("func_name", "")       # e.g. "HttpClient.get"
+        signature  = row.get("func_code_string", "") # full function source
+        docstring  = row.get("func_documentation_string", "").strip()
+
+        if not func_name or not docstring or not signature:
+            continue
+
+        # Extract simple name (last part after dot)
+        simple_name = func_name.split(".")[-1]
+
+        # Get the first line of the source (the def line) as the signature
+        sig_line = signature.strip().splitlines()[0].strip()
+        if not sig_line.startswith("def ") and not sig_line.startswith("async def "):
+            sig_line = f"def {simple_name}():"
+
+        # Clean the docstring
+        target = _clean_docstring(docstring)
+        if len(target) < 10:
+            continue
+
+        input_text = f"Summarize Python: {sig_line}"
+        entries.append(CorpusEntry(
+            func_name=simple_name,
+            input_text=input_text,
+            target_text=target,
+        ))
+
+    return entries
+
+
+# ── Dataset persistence ───────────────────────────────────────────────────────
+
+def save_corpus(
+    corpus: List[CorpusEntry],
+    output_dir: str,
+    base_name: str = "training_corpus",
+) -> dict:
+    """
+    Save the corpus to disk in JSON and CSV formats.
+
+    Creates:
+      {output_dir}/{base_name}.json  — full data (all fields)
+      {output_dir}/{base_name}.csv   — tabular format for spreadsheet viewing
+
+    Args:
+        corpus:     List of CorpusEntry objects.
+        output_dir: Directory to save files to.
+        base_name:  Filename prefix (without extension).
+
+    Returns:
+        dict with file paths and corpus statistics.
+    """
+    import json
+    import csv
+    import pathlib
+
+    out = pathlib.Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    json_path = out / f"{base_name}.json"
+    csv_path  = out / f"{base_name}.csv"
+
+    # JSON
+    records = [
+        {
+            "id":          i,
+            "func_name":   e.func_name,
+            "input_text":  e.input_text,
+            "target_text": e.target_text,
+        }
+        for i, e in enumerate(corpus)
+    ]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "metadata": {
+                "total_samples":  len(corpus),
+                "description":    "CodeT5 fine-tuning corpus: (function_signature, docstring) pairs",
+                "input_format":   "Summarize Python: def func_name(params) -> return_type:",
+                "target_format":  "First sentence of the function docstring.",
+                "sources":        ["Python stdlib", "installed packages", "CodeSearchNet"],
+            },
+            "data": records,
+        }, f, indent=2, ensure_ascii=False)
+
+    # CSV
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["id", "func_name", "input_text", "target_text"])
+        writer.writeheader()
+        writer.writerows(records)
+
+    return {
+        "json_path":    str(json_path),
+        "csv_path":     str(csv_path),
+        "total_samples": len(corpus),
+    }
+
+
+def load_corpus(json_path: str) -> List[CorpusEntry]:
+    """Load a saved corpus from a JSON file."""
+    import json
+    with open(json_path, encoding="utf-8") as f:
+        data = json.load(f)
+    records = data if isinstance(data, list) else data.get("data", [])
+    return [
+        CorpusEntry(
+            func_name=r["func_name"],
+            input_text=r["input_text"],
+            target_text=r["target_text"],
+        )
+        for r in records
+    ]
+
