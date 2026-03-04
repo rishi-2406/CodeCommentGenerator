@@ -1,12 +1,14 @@
 """
-ML/AI package — Week 9
-======================
+ML/AI package — Week 9 (updated with CodeT5)
+=============================================
 Sub-modules:
+  corpus_builder   : builds (signature, docstring) corpus from stdlib + packages
   feature_vectors  : extract numeric vectors from AST features
-  dataset          : build labeled (X, y) dataset
+  dataset          : build labelled (X, y) dataset for TF-IDF model
   tfidf_model      : TF-IDF + LogisticRegression comment classifier
-  seq2seq_model    : lightweight offline template-ranking model
-  model_selector   : pick best model prediction
+  seq2seq_model    : lightweight offline template-ranking model (fallback)
+  codet5_model     : CodeT5 fine-tuned seq2seq model (primary)
+  model_selector   : pick best model prediction (CodeT5 > TF-IDF > template)
   evaluator        : BLEU-4, ROUGE-L, exact-match metrics
   trainer          : end-to-end train + evaluate + save
 """

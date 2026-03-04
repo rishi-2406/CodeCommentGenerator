@@ -389,10 +389,30 @@ def ml_generate_comments(
             fallback_item = rule_map.get(ff.name)
             fallback_text = fallback_item.text if fallback_item else None
 
+            # Build a function signature string for CodeT5
+            try:
+                real_params = [p for p in ff.params if p.name not in ("self", "cls")]
+                param_parts = []
+                for p in ff.params:
+                    part = p.name
+                    if p.annotation:
+                        part += f": {p.annotation}"
+                    if p.default is not None:
+                        part += f" = {p.default}"
+                    param_parts.append(part)
+                sig = f"def {ff.name}({', '.join(param_parts)})"
+                if ff.return_annotation and ff.return_annotation != "None":
+                    sig += f" -> {ff.return_annotation}"
+                sig += ":"
+            except Exception:
+                sig = f"def {ff.name}():"
+
             try:
                 feat_vec = extract_feature_vector(ff, fc)
                 ml_text, source, confidence = model_selector.predict(
-                    ff.name, feat_vec, fallback=fallback_text
+                    ff.name, feat_vec,
+                    fallback=fallback_text,
+                    func_signature=sig,
                 )
                 # Ensure it looks like a proper docstring
                 if not ml_text.strip().startswith('"""'):
@@ -410,6 +430,7 @@ def ml_generate_comments(
                 kind="docstring",
                 target_name=ff.name,
             ))
+
 
         # Inline block comment for moderate/complex/very_complex functions
         if fc and fc.complexity_label != "simple":
