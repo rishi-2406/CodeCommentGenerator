@@ -90,6 +90,11 @@ class ModelSelector:
     def is_ready(self) -> bool:
         return any(m is not None for m in [self._codet5, self._tfidf, self._template])
 
+    @property
+    def codet5_model(self):
+        """Return the CodeT5Model instance (or None) for direct use."""
+        return self._codet5
+
     def summary(self) -> dict:
         return {
             "codet5_loaded":   self._codet5   is not None,

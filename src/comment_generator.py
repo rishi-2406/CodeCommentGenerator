@@ -326,6 +326,7 @@ def ml_generate_comments(
     module_features: ModuleFeatures,
     context_graph: ContextGraph,
     model_selector=None,
+    source_code: str = "",
 ) -> List[CommentItem]:
     """
     Generate comments using the ML ModelSelector when available.
@@ -336,6 +337,9 @@ def ml_generate_comments(
       3. Ask the ModelSelector to predict; use its output if confidence ≥ threshold.
       4. Wrap the result in a CommentItem (same format as generate_comments).
 
+    For complex functions (complexity ≥ 3, body ≥ 8 lines), also generates
+    inline `# comments` above significant code blocks using BlockCommenter.
+
     Falls back to the pure rule-based generate_comments() if no
     ModelSelector is provided or if a model error occurs.
 
@@ -343,6 +347,7 @@ def ml_generate_comments(
         module_features: Output of ast_extractor.extract_features().
         context_graph:   Output of context_analyzer.analyze_context().
         model_selector:  A ModelSelector instance (or None).
+        source_code:     Raw source string of the module (for block extraction).
 
     Returns:
         List[CommentItem] sorted by line number.
@@ -354,6 +359,17 @@ def ml_generate_comments(
         from .ml.feature_vectors import extract_feature_vector
     except ImportError:
         return generate_comments(module_features, context_graph)
+
+    # Set up block commenter if source code is available and CodeT5 is loaded
+    block_commenter = None
+    if source_code:
+        try:
+            from .ml.block_commenter import BlockCommenter
+            codet5 = getattr(model_selector, "codet5_model", None)
+            if codet5 is not None:
+                block_commenter = BlockCommenter(codet5)
+        except Exception:
+            pass
 
     # First generate rule-based comments to get fallback text
     rule_comments = generate_comments(module_features, context_graph)
@@ -432,8 +448,25 @@ def ml_generate_comments(
             ))
 
 
-        # Inline block comment for moderate/complex/very_complex functions
-        if fc and fc.complexity_label != "simple":
+        # Inline block comments for moderate/complex/very_complex functions
+        if source_code and block_commenter and fc:
+            # BlockCommenter handles the complexity threshold internally
+            try:
+                block_comments = block_commenter.generate(source_code, ff, fc)
+                for lineno, col_offset, comment_text in block_comments:
+                    comments.append(CommentItem(
+                        node_id=ff.node_id + f"_block_{lineno}",
+                        node_type="inline",
+                        lineno=lineno,
+                        col_offset=col_offset,  # actual block indentation
+                        text=comment_text,
+                        kind="inline",
+                        target_name=ff.name,
+                    ))
+            except Exception:
+                pass
+        elif fc and fc.complexity_label != "simple":
+            # Fallback to rule-based inline comment
             inline = _generate_inline_comment(ff, fc)
             if inline:
                 comments.append(CommentItem(

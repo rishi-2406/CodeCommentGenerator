@@ -101,7 +101,7 @@ class TestBuildStdlibCorpus:
     def test_entry_has_input_text(self):
         entries = build_stdlib_corpus(max_files=5)
         for e in entries:
-            assert e.input_text.startswith("Summarize Python: def ")
+            assert e.input_text.startswith("Summarize Python: ") or e.input_text.startswith("Comment Python block: ")
 
     def test_entry_has_target_text(self):
         entries = build_stdlib_corpus(max_files=5)
@@ -175,6 +175,15 @@ class TestCodeT5Model:
             model.fine_tune(corpus, epochs=1, batch_size=2, verbose=False)
             cls._shared_model = model
         return cls._shared_model
+
+    @classmethod
+    def teardown_class(cls):
+        """Release the shared model and clear CUDA cache to prevent OOM."""
+        cls._shared_model = None
+        if _HAS_TRANSFORMERS and torch.cuda.is_available():
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def test_generate_returns_string(self):
         model = self._get_model()

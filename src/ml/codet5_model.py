@@ -41,7 +41,7 @@ from .corpus_builder import CorpusEntry
 
 # ── Pre-trained model identifier ─────────────────────────────────────────────
 MODEL_NAME = "Salesforce/codet5-small"
-MAX_INPUT_LEN  = 128   # tokens
+MAX_INPUT_LEN  = 256   # tokens (increased to fit block code bodies)
 MAX_TARGET_LEN = 64    # tokens
 
 
@@ -132,7 +132,7 @@ class CodeT5Model:
         self,
         corpus: List[CorpusEntry],
         epochs: int = 3,
-        batch_size: int = 8,
+        batch_size: int = 16,  # GPU-friendly default (reduce to 4 for CPU)
         lr: float = 5e-4,
         warmup_ratio: float = 0.1,
         val_split: float = 0.1,

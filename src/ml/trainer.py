@@ -26,6 +26,7 @@ from .seq2seq_model import TemplateRankingModel
 from .model_selector import ModelSelector
 from .evaluator import evaluate_dataset, EvalReport
 from .corpus_builder import build_full_corpus, CorpusEntry, save_corpus
+from .block_corpus_builder import build_block_corpus, save_block_corpus, BlockEntry
 
 
 def _split_dataset(dataset: Dataset, test_ratio: float = 0.2, seed: int = 42):
@@ -50,8 +51,9 @@ def train_and_evaluate(
     extra_files: Optional[List[str]] = None,
     test_ratio: float = 0.2,
     cv_folds: int = 5,
-    codet5_epochs: int = 3,
-    codet5_batch_size: int = 8,
+    codet5_epochs: int = 8,   # GPU default (use 4 for CPU-only)
+    codet5_batch_size: int = 16,
+    block_max_pairs: int = 20000,   # block-level (code block → inline comment)
     verbose: bool = True,
 ) -> dict:
     """
@@ -86,20 +88,45 @@ def train_and_evaluate(
 
     train_ds, test_ds = _split_dataset(dataset, test_ratio=test_ratio)
 
-    # ── 2. Build large corpus (for CodeT5 fine-tuning) ────────────────────────
-    _log("Building training corpus from stdlib + packages …")
-    full_corpus = build_full_corpus(
+    # ── 2. Build function-level corpus (for CodeT5 fine-tuning) ──────────────
+    _log("Building function-level corpus from stdlib + packages …")
+    func_corpus = build_full_corpus(
         include_stdlib=True,
         include_packages=True,
         include_codesearchnet=True,
         verbose=verbose,
     )
-    train_corpus, test_corpus = _split_corpus(full_corpus, test_ratio=test_ratio)
-    _log(f"  Corpus — train: {len(train_corpus)}  test: {len(test_corpus)}")
+    _log(f"  Function corpus: {len(func_corpus)} pairs")
 
-    # Save corpus to disk for inspection
+    # ── 2b. Build block-level corpus (code block → inline comment) ────────────
+    _log(f"Building block-level corpus (target: {block_max_pairs} pairs) …")
+    block_corpus_raw = build_block_corpus(
+        max_files=10000,
+        max_pairs=block_max_pairs,
+        verbose=verbose,
+    )
+    # Convert BlockEntry → CorpusEntry so they can be mixed into one training set
+    block_as_corpus = [
+        CorpusEntry(
+            func_name=e.block_type,
+            input_text=e.input_text,
+            target_text=e.target_text,
+        )
+        for e in block_corpus_raw
+    ]
+    _log(f"  Block corpus: {len(block_as_corpus)} pairs")
+
+    # Save block corpus separately for instructor inspection
+    save_block_corpus(block_corpus_raw, output_dir=output_dir, base_name="block_corpus")
+
+    # Merge corpora
+    full_corpus = func_corpus + block_as_corpus
+    train_corpus, test_corpus = _split_corpus(full_corpus, test_ratio=test_ratio)
+    _log(f"  Combined corpus — train: {len(train_corpus)}  test: {len(test_corpus)}")
+
+    # Save combined corpus to disk for inspection
     corpus_info = save_corpus(full_corpus, output_dir=output_dir, base_name="training_corpus")
-    _log(f"  Corpus saved: {corpus_info['total_samples']} samples → {corpus_info['json_path']}")
+    _log(f"  Combined corpus saved: {corpus_info['total_samples']} samples → {corpus_info['json_path']}")
 
     # ── 3. Train TFIDFCommentModel ────────────────────────────────────────────
     _log("Training TF-IDF + Logistic Regression model …")

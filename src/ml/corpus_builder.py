@@ -162,14 +162,12 @@ def _stdlib_paths() -> List[str]:
     return paths
 
 
-def build_stdlib_corpus(max_files: int = 150) -> List[CorpusEntry]:
+def build_stdlib_corpus(max_files: int = 800, verbose: bool = True) -> List[CorpusEntry]:
     """
-    Extract (signature, docstring) pairs from the Python standard library.
+    Parse Python standard library modules to extract (signature → docstring) pairs.
 
     Args:
         max_files: Maximum number of stdlib .py files to scan.
-
-    Returns:
         List of CorpusEntry objects.
     """
     paths = _stdlib_paths()[:max_files]
@@ -227,16 +225,73 @@ def build_package_corpus(packages: Optional[List[str]] = None,
     return entries
 
 
+def build_mbpp_corpus(max_samples: int = 1500, verbose: bool = True) -> List[CorpusEntry]:
+    """Extract high-quality function intents from Google's MBPP dataset."""
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        return []
+    
+    if verbose:
+        print("  [corpus] Downloading MBPP (train) …")
+        
+    try:
+        ds = load_dataset("google-research-datasets/mbpp", split="train", streaming=True)
+    except Exception as e:
+        if verbose: print(f"  [corpus] MBPP skipped: {e}")
+        return []
+
+    entries: List[CorpusEntry] = []
+    seen = set()
+    for row in ds:
+        code = row.get("code", "")
+        text = row.get("text", "")
+        if not code or not text:
+            continue
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            continue
+            
+        func_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                func_node = node
+                break
+        if not func_node:
+            continue
+            
+        try:
+            sig = _build_signature(func_node)
+        except Exception:
+            continue
+            
+        target = text.strip()
+        if not target.endswith("."): target += "."
+        input_text = f"Summarize Python: {sig}"
+        
+        if input_text not in seen:
+            seen.add(input_text)
+            entries.append(CorpusEntry(
+                func_name=func_node.name,
+                input_text=input_text,
+                target_text=target,
+            ))
+            if len(entries) >= max_samples:
+                break
+    return entries
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def build_full_corpus(
     include_stdlib: bool = True,
     include_packages: bool = True,
     include_codesearchnet: bool = True,
-    max_stdlib_files: int = 150,
-    max_files_per_pkg: int = 30,
+    max_stdlib_files: int = 1500,
+    max_files_per_pkg: int = 200,
     codesearchnet_split: str = "train",
-    codesearchnet_max: int = 5000,
+    codesearchnet_max: int = 15000,
     deduplicate: bool = True,
     verbose: bool = True,
 ) -> List[CorpusEntry]:
@@ -245,8 +300,9 @@ def build_full_corpus(
 
     Sources (in order):
       1. Python standard library
-      2. Installed third-party packages
-      3. CodeSearchNet (HuggingFace) — requires `pip install datasets`
+      2. MBPP (Google Research)
+      3. Installed third-party packages
+      4. CodeSearchNet (HuggingFace) — requires `pip install datasets`
 
     Returns:
         Deduplicated list of CorpusEntry objects.
@@ -254,10 +310,17 @@ def build_full_corpus(
     entries: List[CorpusEntry] = []
 
     if include_stdlib:
-        stdlib_entries = build_stdlib_corpus(max_files=max_stdlib_files)
+        stdlib_entries = build_stdlib_corpus(max_files=max_stdlib_files, verbose=verbose)
         if verbose:
             print(f"  [corpus] stdlib: {len(stdlib_entries)} entries")
         entries.extend(stdlib_entries)
+        
+    # Inject MBPP for extremely high quality function descriptions
+    if include_codesearchnet: # Assuming include_codesearchnet also controls MBPP for now
+        mbpp_entries = build_mbpp_corpus(max_samples=2000, verbose=verbose)
+        if verbose and mbpp_entries:
+            print(f"  [corpus] MBPP: {len(mbpp_entries)} entries")
+        entries.extend(mbpp_entries)
 
     if include_packages:
         pkg_entries = build_package_corpus(max_files_per_pkg=max_files_per_pkg)
@@ -455,4 +518,3 @@ def load_corpus(json_path: str) -> List[CorpusEntry]:
         )
         for r in records
     ]
-

@@ -224,6 +224,19 @@ class TestModelSelector:
 # ── train_and_evaluate smoke test ─────────────────────────────────────────────
 
 class TestTrainAndEvaluate:
+    @pytest.fixture(autouse=True)
+    def _cleanup_cuda(self):
+        """Ensure CUDA memory is freed after tests."""
+        yield
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     def test_produces_json_reports(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = train_and_evaluate(output_dir=tmpdir, verbose=False)

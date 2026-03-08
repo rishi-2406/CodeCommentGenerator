@@ -43,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("filepath", nargs="?", default=None,
                    help="Path to the Python source file to annotate")
+    p.add_argument("--block-max-pairs", type=int, default=20000,
+                        help="Maximum block-level (code -> inline comment) pairs to extract.")
     p.add_argument("--output", "-o", metavar="FILE",
                    help="Write annotated source to FILE (default: print to stdout)")
     p.add_argument("--logs", action="store_true",
@@ -119,7 +121,10 @@ def run_pipeline(filepath: str, logger: PipelineLogger, model_selector=None):
     # ── Stage 5: Generate Comments ───────────────────────────────────
     logger.begin_stage("generate")
     if model_selector is not None and model_selector.is_ready():
-        comments = ml_generate_comments(module_features, context_graph, model_selector)
+        comments = ml_generate_comments(
+            module_features, context_graph, model_selector,
+            source_code=source_code,
+        )
         gen_engine = "ml"
     else:
         comments = generate_comments(module_features, context_graph)
