@@ -1,0 +1,392 @@
+"""
+AST Dataset Builder
+===================
+Builds a (ast_feature_text, docstring) training corpus by:
+
+  1. Downloading CodeSearchNet Python from HuggingFace  (primary, ~500k fns)
+  2. Crawling the Python standard library                (offline fallback)
+  3. Crawling installed third-party packages             (optional)
+
+For every function that has an existing docstring:
+  - Parse the full function body with `ast`
+  - Run ast_extractor  → FunctionFeature
+  - Run context_analyzer → FunctionContext
+  - Extract raises      → List[str]
+  - Format with ast_feature_formatter.format_for_model()
+  - Clean the docstring to a single sentence  → target
+
+The resulting pairs teach the T5 model:
+    "given this AST structure → produce this English description"
+"""
+import ast
+import os
+import re
+import textwrap
+from dataclasses import dataclass
+from typing import List, Optional
+
+
+@dataclass
+class ASTTrainPair:
+    """One training sample: structured AST text → target docstring."""
+    func_name:    str
+    input_text:   str   # output of ast_feature_formatter.format_for_model()
+    target_text:  str   # clean first-sentence docstring
+
+
+# ── Docstring cleaning ────────────────────────────────────────────────────────
+
+def _clean_docstring(raw: str) -> str:
+    """Extract a clean first sentence from a raw docstring."""
+    if not raw:
+        return ""
+    text = textwrap.dedent(raw).strip()
+    first_para = text.split("\n\n")[0].strip()
+    first_para = " ".join(line.strip() for line in first_para.splitlines()).strip()
+    
+    # Drop section headers (e.g. "Parameters\n----------")
+    if re.match(r'^[A-Z][a-z]+\s*$', first_para):
+        return ""
+        
+    if len(first_para) > 200:
+        sentences = re.split(r'(?<=[.!?])\s+', first_para)
+        first_para = sentences[0] if sentences else first_para[:200]
+        
+    first_para = first_para.rstrip(".").strip() + "."
+    return first_para if len(first_para) > 6 else ""
+
+
+# ── Per-source-file extraction ────────────────────────────────────────────────
+
+def _extract_pairs_from_source(
+    source_code: str,
+    filepath: str = "",
+    min_doc_len: int = 12,
+) -> List[ASTTrainPair]:
+    """
+    Parse one Python source file and return ASTTrainPair for every
+    function that has a docstring.
+
+    The full pipeline runs on each function:
+      ast.parse → extract_features → analyze_context → extract_raises →
+      format_for_model → clean_docstring
+    """
+    try:
+        tree = ast.parse(source_code, filename=filepath)
+    except SyntaxError:
+        return []
+
+    # Import here to avoid circular imports at module load time
+    try:
+        from ..ast_extractor import extract_features
+        from ..context_analyzer import analyze_context
+        from ..ast_body_extractor import extract_raises
+        from .ast_feature_formatter import format_for_model
+    except ImportError:
+        return []
+
+    try:
+        mf = extract_features(tree, source_code=source_code, filepath=filepath)
+        cg = analyze_context(mf, tree, source_code=source_code)
+    except Exception:
+        return []
+
+    fc_map = {fc.name: fc for fc in cg.function_contexts}
+
+    pairs: List[ASTTrainPair] = []
+    for ff in mf.functions:
+        if not ff.has_docstring or not ff.docstring:
+            continue
+        target = _clean_docstring(ff.docstring)
+        if len(target) < min_doc_len:
+            continue
+
+        fc = fc_map.get(ff.name)
+        end_line = ff.lineno + ff.body_lines
+        try:
+            raises = extract_raises(source_code, ff.lineno, end_line)
+        except Exception:
+            raises = []
+
+        try:
+            input_text = format_for_model(ff, fc, raises)
+        except Exception:
+            continue
+
+        pairs.append(ASTTrainPair(
+            func_name=ff.name,
+            input_text=input_text,
+            target_text=target,
+        ))
+
+    return pairs
+
+
+# ── HuggingFace CodeSearchNet ─────────────────────────────────────────────────
+
+def build_codesearchnet_dataset(
+    split: str = "train",
+    max_samples: int = 30_000,
+    verbose: bool = True,
+) -> List[ASTTrainPair]:
+    """
+    Download the CodeSearchNet Python dataset from HuggingFace and extract
+    (AST feature text, docstring) pairs from every parseable function.
+
+    Each function's source code is re-parsed with ast to extract the full
+    set of AST features — not just the signature.
+
+    Args:
+        split:       "train", "validation", or "test".
+        max_samples: Cap on number of pairs to return.
+        verbose:     Print progress.
+
+    Returns:
+        List of ASTTrainPair.
+    """
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        if verbose:
+            print("  [dataset] `datasets` not installed — pip install datasets")
+        return []
+
+    if verbose:
+        print(f"  [dataset] Downloading CodeSearchNet Python ({split}) …")
+
+    try:
+        ds = load_dataset(
+            "code_search_net", "python",
+            split=split,
+            trust_remote_code=True,
+        )
+    except Exception as exc:
+        if verbose:
+            print(f"  [dataset] CodeSearchNet download failed: {exc}")
+        return []
+
+    pairs: List[ASTTrainPair] = []
+    seen: set = set()
+
+    for row in ds:
+        if len(pairs) >= max_samples:
+            break
+
+        func_source = row.get("func_code_string", "")
+        docstring   = row.get("func_documentation_string", "").strip()
+        func_name   = row.get("func_name", "").split(".")[-1]
+
+        if not func_source or not docstring or not func_name:
+            continue
+
+        target = _clean_docstring(docstring)
+        if len(target) < 12:
+            continue
+
+        # Deduplication key
+        key = (func_name, target[:60])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        # Re-parse with our full pipeline to extract AST features
+        new_pairs = _extract_pairs_from_source(func_source, filepath=func_name)
+
+        if new_pairs:
+            # Use the first (and usually only) function found
+            p = new_pairs[0]
+            # Override target with the dataset's cleaned docstring
+            # (more reliable than what ast.get_docstring gives from the stub)
+            p.target_text = target
+            pairs.append(p)
+        else:
+            # If AST parse failed, try a minimal fallback pair using format_for_model
+            # by building a minimal FunctionFeature from what we know
+            try:
+                pairs.append(_fallback_pair(func_source, func_name, target))
+            except Exception:
+                pass
+
+    if verbose:
+        print(f"  [dataset] CodeSearchNet: {len(pairs)} AST pairs extracted")
+
+    return pairs
+
+
+def _fallback_pair(
+    func_source: str, func_name: str, target: str
+) -> Optional[ASTTrainPair]:
+    """
+    Minimal fallback: parse just the def line to extract signature info,
+    produce a partial feature text.  Used only when full pipeline fails.
+    """
+    try:
+        tree = ast.parse(func_source)
+    except SyntaxError:
+        return None
+
+    from .ast_feature_formatter import format_for_model
+    try:
+        from ..ast_extractor import extract_features
+        mf = extract_features(tree, source_code=func_source)
+        for ff in mf.functions:
+            input_text = format_for_model(ff, fc=None, raises=[])
+            return ASTTrainPair(func_name=ff.name, input_text=input_text, target_text=target)
+    except Exception:
+        pass
+    return None
+
+
+# ── Standard library (offline fallback) ──────────────────────────────────────
+
+_SKIP_DIRS = {"test", "tests", "__pycache__", "idlelib", "tkinter", "turtle"}
+
+
+def build_stdlib_dataset(
+    max_files: int = 500,
+    verbose: bool = True,
+) -> List[ASTTrainPair]:
+    """
+    Crawl the Python standard library and extract (AST feature, docstring)
+    pairs from documented public functions.
+
+    This is the offline fallback used when HuggingFace is unavailable.
+
+    Args:
+        max_files: Maximum number of .py files to scan.
+        verbose:   Print progress.
+    """
+    stdlib_dir = os.path.dirname(os.__file__)
+    py_files: List[str] = []
+
+    for root, dirs, files in os.walk(stdlib_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith("_")]
+        for fname in files:
+            if fname.endswith(".py") and not fname.startswith("_"):
+                py_files.append(os.path.join(root, fname))
+        if len(py_files) >= max_files:
+            break
+
+    pairs: List[ASTTrainPair] = []
+    for fpath in py_files[:max_files]:
+        try:
+            with open(fpath, encoding="utf-8", errors="ignore") as f:
+                src = f.read()
+            pairs.extend(_extract_pairs_from_source(src, filepath=fpath))
+        except Exception:
+            pass
+
+    if verbose:
+        print(f"  [dataset] stdlib: {len(pairs)} AST pairs extracted")
+    return pairs
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+def build_full_dataset(
+    include_codesearchnet: bool = True,
+    include_stdlib: bool = True,
+    codesearchnet_split: str = "train",
+    codesearchnet_max: int = 30_000,
+    max_stdlib_files: int = 500,
+    deduplicate: bool = True,
+    verbose: bool = True,
+) -> List[ASTTrainPair]:
+    """
+    Build the complete (AST feature text, docstring) training dataset.
+
+    Args:
+        include_codesearchnet: Download from HuggingFace (recommended).
+        include_stdlib:        Crawl stdlib as offline supplement/fallback.
+        codesearchnet_split:   HF dataset split ("train"/"validation"/"test").
+        codesearchnet_max:     Max samples from CodeSearchNet.
+        max_stdlib_files:      Max stdlib .py files to scan.
+        deduplicate:           Remove duplicate (func_name, target) pairs.
+        verbose:               Print progress.
+
+    Returns:
+        List[ASTTrainPair] ready for fine-tuning.
+    """
+    pairs: List[ASTTrainPair] = []
+
+    if include_codesearchnet:
+        pairs.extend(build_codesearchnet_dataset(
+            split=codesearchnet_split,
+            max_samples=codesearchnet_max,
+            verbose=verbose,
+        ))
+
+    if include_stdlib:
+        pairs.extend(build_stdlib_dataset(
+            max_files=max_stdlib_files,
+            verbose=verbose,
+        ))
+
+    if deduplicate:
+        seen: set = set()
+        unique: List[ASTTrainPair] = []
+        for p in pairs:
+            key = (p.func_name, p.target_text[:60])
+            if key not in seen:
+                seen.add(key)
+                unique.append(p)
+        pairs = unique
+
+    if verbose:
+        print(f"  [dataset] total (deduplicated): {len(pairs)} AST training pairs")
+
+    return pairs
+
+
+def save_dataset(
+    pairs: List[ASTTrainPair],
+    output_dir: str,
+    base_name: str = "ast_train_dataset",
+) -> dict:
+    """Save the dataset to JSON and CSV for inspection."""
+    import json, csv, pathlib
+
+    out = pathlib.Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    json_path = out / f"{base_name}.json"
+    csv_path  = out / f"{base_name}.csv"
+
+    records = [
+        {"id": i, "func_name": p.func_name,
+         "input_text": p.input_text, "target_text": p.target_text}
+        for i, p in enumerate(pairs)
+    ]
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "metadata": {
+                "total": len(pairs),
+                "description": "AST feature text → docstring training pairs",
+                "input_format": "structured AST features (loops, conditionals, calls, etc.)",
+                "target_format": "first sentence of the function docstring",
+                "sources": ["CodeSearchNet Python", "Python stdlib"],
+            },
+            "data": records,
+        }, f, indent=2, ensure_ascii=False)
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["id", "func_name", "input_text", "target_text"])
+        w.writeheader()
+        w.writerows(records)
+
+    return {"json_path": str(json_path), "csv_path": str(csv_path), "total": len(pairs)}
+
+
+def load_dataset_from_json(json_path: str) -> List[ASTTrainPair]:
+    """Load a previously saved dataset from JSON."""
+    import json
+    with open(json_path, encoding="utf-8") as f:
+        data = json.load(f)
+    records = data if isinstance(data, list) else data.get("data", [])
+    return [
+        ASTTrainPair(
+            func_name=r["func_name"],
+            input_text=r["input_text"],
+            target_text=r["target_text"],
+        )
+        for r in records
+    ]

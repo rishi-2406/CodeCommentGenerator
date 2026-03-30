@@ -1,22 +1,32 @@
 """
-Comment Generator — Week 9 ML/AI Integration
-=============================================
-Generates meaningful code comments from ModuleFeatures and ContextGraph
-using three complementary strategies:
+Comment Generator — AST-Driven NLP Engine
+==========================================
+Two complementary strategies:
 
-  1. Rule-Based Engine    — deterministic, fast, always produces output
-  2. Template NLP Engine  — richer English prose using token analysis
-  3. ML Engine            — TF-IDF + LogReg / Template Ranking (Week 9)
-                            Activated via ml_generate_comments().
+  1. Rule-Based Engine  — deterministic, always available.
+                          Driven by AST analysis: loops, conditionals, calls,
+                          variables, complexity, decorators, return types, raises.
+
+  2. ML Engine (T5-AST) — activated via ml_generate_comments().
+                          Feeds structured AST feature objects directly into a
+                          fine-tuned T5 model.  The model ONLY sees AST-derived
+                          information — never raw source code or the function name.
 
 Output: List[CommentItem] — each with location, text, and kind.
 """
+import ast
 import re
+import textwrap
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .ast_extractor import ModuleFeatures, FunctionFeature, ClassFeature, ParamFeature
 from .context_analyzer import ContextGraph, FunctionContext
+from .ast_body_extractor import (
+    extract_body_snippet,
+    extract_raises,
+    extract_returned_types,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,16 +128,74 @@ _VERB_MAP = {
     "load_data": "Loads data from",
     "test":      "Tests",
     "assert":    "Asserts",
+    "analyze":   "Analyzes",
+    "analyse":   "Analyses",
+    "detect":    "Detects",
+    "track":     "Tracks",
+    "collect":   "Collects",
+    "gather":    "Gathers",
+    "compare":   "Compares",
+    "evaluate":  "Evaluates",
+    "apply":     "Applies",
+    "dispatch":  "Dispatches",
+    "emit":      "Emits",
+    "publish":   "Publishes",
+    "subscribe": "Subscribes",
+    "resolve":   "Resolves",
+    "notify":    "Notifies",
+    "configure": "Configures",
+    "register":  "Registers",
+    "unregister":"Unregisters",
+    "enable":    "Enables",
+    "disable":   "Disables",
+    "reset":     "Resets",
+    "refresh":   "Refreshes",
+    "clone":     "Clones",
+    "copy":      "Copies",
+    "move":      "Moves",
+    "rename":    "Renames",
+    "serialize": "Serializes",
+    "deserialize":"Deserializes",
+    "dump":      "Dumps",
+    "restore":   "Restores",
+    "backup":    "Backs up",
+    "import":    "Imports",
+    "export":    "Exports",
+    "upload":    "Uploads",
+    "download":  "Downloads",
+    "compress":  "Compresses",
+    "decompress":"Decompresses",
+    "hash":      "Hashes",
+    "sign":      "Signs",
+    "verify":    "Verifies",
+    "authenticate": "Authenticates",
+    "authorize": "Authorizes",
+    "tokenize":  "Tokenizes",
+    "stem":      "Stems",
+    "lemmatize": "Lemmatizes",
+    "predict":   "Predicts",
+    "infer":     "Infers",
+    "classify":  "Classifies",
+    "cluster":   "Clusters",
+    "embed":     "Embeds",
+    "train":     "Trains",
+    "fit":       "Fits",
+    "score":     "Scores",
+    "plot":      "Plots",
+    "draw":      "Draws",
+    "paint":     "Paints",
+    "resize":    "Resizes",
+    "crop":      "Crops",
+    "rotate":    "Rotates",
+    "flip":      "Flips",
 }
 
 
 def _split_identifier(name: str) -> List[str]:
     """Split snake_case and CamelCase identifiers into lowercase tokens."""
-    # First split on underscores
     parts = name.split("_")
     tokens = []
     for part in parts:
-        # Then split on CamelCase boundaries
         sub = re.sub(r'([A-Z][a-z]+)', r' \1', part)
         sub = re.sub(r'([A-Z]+)([A-Z][a-z])', r' \1 \2', sub)
         tokens.extend(sub.strip().lower().split())
@@ -147,73 +215,248 @@ def _pick_verb(tokens: List[str]) -> str:
     return "Handles"
 
 
-def _param_description(params: List[ParamFeature]) -> str:
-    """Build a human-readable list of parameters."""
-    if not params:
-        return ""
-    param_strs = []
-    for p in params:
-        if p.name in ("self", "cls"):
-            continue
-        desc = p.name
-        if p.annotation:
-            desc += f" ({p.annotation})"
-        param_strs.append(desc)
-    if not param_strs:
-        return ""
-    return ", ".join(param_strs)
+def _humanize(name: str) -> str:
+    """Turn a snake_case or camelCase identifier into a readable phrase."""
+    return " ".join(_split_identifier(name))
 
 
 # ---------------------------------------------------------------------------
-# Rule-based engine
+# AST-driven body analysis helpers
 # ---------------------------------------------------------------------------
 
-def _generate_function_docstring(ff: FunctionFeature, fc: Optional[FunctionContext] = None) -> str:
+def _describe_body(
+    ff: FunctionFeature,
+    fc: Optional[FunctionContext],
+    source_code: str = "",
+) -> List[str]:
     """
-    Generate a docstring for a function using rule-based + template NLP.
+    Compose natural-language sentences that describe what the function body
+    *actually does*, derived entirely from extracted AST features.
+
+    Returns a list of plain-text sentences (may be empty).
+    """
+    sentences: List[str] = []
+
+    # ── Async marker ─────────────────────────────────────────────────────────
+    if ff.is_async:
+        sentences.append("Runs asynchronously (coroutine).")
+
+    # ── Loop analysis ────────────────────────────────────────────────────────
+    if ff.loops == 1:
+        sentences.append("Iterates over a sequence using 1 loop.")
+    elif ff.loops > 1:
+        sentences.append(f"Iterates over sequences using {ff.loops} loops.")
+
+    # ── Conditional / branching ──────────────────────────────────────────────
+    if ff.conditionals == 1:
+        sentences.append("Applies 1 conditional branch to control flow.")
+    elif ff.conditionals > 1:
+        sentences.append(
+            f"Applies {ff.conditionals} conditional branches to control flow."
+        )
+
+    # ── Cyclomatic complexity ────────────────────────────────────────────────
+    if fc:
+        cc = fc.cyclomatic_complexity
+        label = fc.complexity_label
+        if label == "moderate":
+            sentences.append(
+                f"Has moderate control-flow complexity (cyclomatic complexity = {cc})."
+            )
+        elif label == "complex":
+            sentences.append(
+                f"Has high control-flow complexity (cyclomatic complexity = {cc}); "
+                "consider splitting into smaller functions."
+            )
+        elif label == "very_complex":
+            sentences.append(
+                f"Has very high control-flow complexity (cyclomatic complexity = {cc}); "
+                "refactoring is strongly recommended."
+            )
+
+    # ── Internal calls (within this module) ─────────────────────────────────
+    if fc and fc.calls_internal:
+        call_list = ", ".join(f"`{c}()`" for c in fc.calls_internal[:5])
+        suffix = " and more" if len(fc.calls_internal) > 5 else ""
+        sentences.append(f"Delegates to module-internal function(s): {call_list}{suffix}.")
+
+    # ── External calls ───────────────────────────────────────────────────────
+    if fc and fc.calls_external:
+        # Show up to 4 most informative external calls (exclude builtins)
+        _builtins = {"print", "len", "range", "str", "int", "float", "bool",
+                     "list", "dict", "set", "tuple", "type", "isinstance",
+                     "hasattr", "getattr", "setattr", "super", "enumerate",
+                     "zip", "map", "filter", "sorted", "reversed", "any", "all",
+                     "max", "min", "sum", "abs", "round", "repr", "vars",
+                     "open", "iter", "next"}
+        ext = [c for c in fc.calls_external if c.split(".")[0] not in _builtins][:4]
+        if ext:
+            call_list = ", ".join(f"`{c}`" for c in ext)
+            sentences.append(f"Calls external function(s): {call_list}.")
+
+    # ── Variable / data-structure usage ─────────────────────────────────────
+    if fc and fc.variables:
+        types_seen: Set[str] = set()
+        for vi in fc.variables:
+            if vi.inferred_type and vi.inferred_type not in (
+                "None", "NoneType", "bool", "int", "float", "str"
+            ):
+                types_seen.add(vi.inferred_type)
+        interesting = sorted(types_seen - {"object"})[:4]
+        if interesting:
+            sentences.append(
+                "Works with data structure(s): " + ", ".join(interesting) + "."
+            )
+
+    # ── Raises ───────────────────────────────────────────────────────────────
+    if source_code:
+        raises = extract_raises(source_code, ff.lineno,
+                                ff.lineno + ff.body_lines)
+        if raises:
+            exc_list = ", ".join(raises[:4])
+            sentences.append(f"May raise: {exc_list}.")
+
+    # ── Decorators ───────────────────────────────────────────────────────────
+    for dec in ff.decorators:
+        if "property" in dec:
+            sentences.append("Defined as a property accessor.")
+        elif "staticmethod" in dec:
+            sentences.append("Defined as a static method (no instance binding).")
+        elif "classmethod" in dec:
+            sentences.append("Defined as a class method.")
+        elif "abstractmethod" in dec:
+            sentences.append("Declared as an abstract method; must be overridden by subclasses.")
+        elif "cache" in dec.lower() or "lru_cache" in dec.lower():
+            sentences.append("Results are memoized using a cache decorator.")
+        elif "overload" in dec.lower():
+            sentences.append("Uses @overload to support multiple call signatures.")
+
+    # ── Body length note ─────────────────────────────────────────────────────
+    if ff.body_lines > 50:
+        sentences.append(
+            f"Note: This function spans {ff.body_lines} lines — "
+            "consider breaking it into smaller, focused units."
+        )
+
+    return sentences
+
+
+def _describe_class_attributes(cf: ClassFeature) -> List[str]:
+    """Return description lines for class-level variables."""
+    if not cf.class_variables:
+        return []
+    public = [v for v in cf.class_variables if not v.startswith("_")]
+    private = [v for v in cf.class_variables if v.startswith("_")]
+    lines = []
+    if public:
+        lines.append("Attributes:")
+        for v in public[:8]:
+            lines.append(f"    {v}: {_humanize(v)}.")
+    if private:
+        lines.append("")
+        lines.append(f"    Internal attribute(s): {', '.join(private[:5])}.")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Rule-based docstring builders
+# ---------------------------------------------------------------------------
+
+def _generate_function_docstring(
+    ff: FunctionFeature,
+    fc: Optional[FunctionContext] = None,
+    source_code: str = "",
+) -> str:
+    """
+    Generate a rich docstring for a function using full AST analysis.
+
+    Incorporates:
+    - Verb derived from function name tokens
+    - Noun phrase from remaining name tokens
+    - Whether it's a method/async
+    - Body description (loops, conditionals, calls, variables, raises, decorators)
+    - Parameters with types and defaults
+    - Return type (from annotation + inferred return expressions)
+    - Raises section  (from AST walk)
+    - Complexity note for complex/very_complex functions
     """
     tokens = _meaningful_tokens(ff.name)
     verb = _pick_verb(tokens)
-    noun_phrase = " ".join(t for t in tokens if t not in _VERB_MAP).strip()
+    noun_tokens = [t for t in tokens if t not in _VERB_MAP]
+    noun_phrase = " ".join(noun_tokens).strip()
     if not noun_phrase:
-        noun_phrase = ff.name.replace("_", " ")
+        noun_phrase = _humanize(ff.name)
 
-    # Summary line
-    summary = f"{verb} {noun_phrase}."
+    # Context prefix (method vs function, async)
+    context_prefix = ""
+    if ff.is_async:
+        context_prefix = "Asynchronously "
+    elif ff.is_method and ff.parent_class:
+        pass  # method context implied by the class docstring
+
+    summary = f"{context_prefix}{verb} {noun_phrase}."
 
     lines = ['"""', summary]
 
-    # Parameters section
+    # ── Body analysis section ────────────────────────────────────────────────
+    body_sentences = _describe_body(ff, fc, source_code)
+    # Filter out the async sentence since it's already in the summary
+    body_sentences = [s for s in body_sentences if not s.startswith("Runs asynchronously")]
+    if body_sentences:
+        lines.append("")
+        for sent in body_sentences:
+            # Wrap long sentences at 80 chars within the docstring
+            wrapped = textwrap.fill(sent, width=76, subsequent_indent="    ")
+            lines.append(wrapped)
+
+    # ── Args section ────────────────────────────────────────────────────────
     real_params = [p for p in ff.params if p.name not in ("self", "cls")]
     if real_params:
         lines.append("")
         lines.append("Args:")
         for p in real_params:
             ann = f" ({p.annotation})" if p.annotation else ""
-            default = f", defaults to {p.default}" if p.default is not None else ""
-            lines.append(f"    {p.name}{ann}: {p.name.replace('_', ' ')}{default}.")
+            default = f", defaults to ``{p.default}``" if p.default is not None else ""
+            desc = _humanize(p.name)
+            lines.append(f"    {p.name}{ann}: {desc}{default}.")
 
-    # Returns section
-    if ff.return_annotation and ff.return_annotation != "None":
+    # ── Returns section ──────────────────────────────────────────────────────
+    ret_ann = ff.return_annotation
+    if ret_ann and ret_ann not in ("None", "none"):
         lines.append("")
         lines.append("Returns:")
-        lines.append(f"    {ff.return_annotation}: The result of {noun_phrase}.")
+        lines.append(f"    {ret_ann}: The {noun_phrase} result.")
+    elif not ret_ann and source_code:
+        # Try to infer from body return expressions
+        inferred = extract_returned_types(
+            source_code, ff.lineno, ff.lineno + ff.body_lines
+        )
+        if inferred and "None" not in inferred:
+            ret_str = " or ".join(inferred[:3])
+            lines.append("")
+            lines.append("Returns:")
+            lines.append(f"    {ret_str}: The {noun_phrase} result.")
 
-    # Complexity note
-    if fc and fc.complexity_label in ("complex", "very_complex"):
-        lines.append("")
-        lines.append(f"Note:")
-        lines.append(f"    Cyclomatic complexity is {fc.cyclomatic_complexity} ({fc.complexity_label}).")
+    # ── Raises section ───────────────────────────────────────────────────────
+    if source_code:
+        raises = extract_raises(source_code, ff.lineno, ff.lineno + ff.body_lines)
+        if raises:
+            lines.append("")
+            lines.append("Raises:")
+            for exc in raises[:4]:
+                lines.append(f"    {exc}: If an error occurs during {noun_phrase}.")
 
     lines.append('"""')
     return "\n".join(lines)
 
 
-def _generate_class_docstring(cf: ClassFeature) -> str:
-    """Generate a docstring for a class."""
+def _generate_class_docstring(
+    cf: ClassFeature,
+    source_code: str = "",
+) -> str:
+    """Generate a rich docstring for a class using full AST analysis."""
     tokens = _meaningful_tokens(cf.name)
     noun_phrase = " ".join(tokens).strip() or cf.name
-    # Capitalise first letter of noun_phrase
     noun_phrase = noun_phrase[0].upper() + noun_phrase[1:] if noun_phrase else cf.name
 
     lines = ['"""', f"Represents a {noun_phrase}."]
@@ -221,47 +464,92 @@ def _generate_class_docstring(cf: ClassFeature) -> str:
     if cf.bases and cf.bases != ["object"]:
         lines.append(f"Inherits from: {', '.join(cf.bases)}.")
 
-    if cf.methods:
+    # ── Attributes section ───────────────────────────────────────────────────
+    attr_lines = _describe_class_attributes(cf)
+    if attr_lines:
         lines.append("")
+        lines.extend(attr_lines)
+
+    # ── Methods section ──────────────────────────────────────────────────────
+    if cf.methods:
         public_methods = [m for m in cf.methods if not m.startswith("_")]
         if public_methods:
+            lines.append("")
             lines.append("Methods:")
-            for m in public_methods[:6]:  # cap at 6 methods listed
-                m_verb = _pick_verb(_meaningful_tokens(m))
-                m_noun = " ".join(t for t in _meaningful_tokens(m) if t not in _VERB_MAP)
-                lines.append(f"    {m}(): {m_verb} {m_noun}.")
+            for m in public_methods[:8]:
+                m_tokens = _meaningful_tokens(m)
+                m_verb = _pick_verb(m_tokens)
+                m_noun = " ".join(t for t in m_tokens if t not in _VERB_MAP)
+                desc = f"{m_verb} {m_noun}." if m_noun else f"{m_verb}."
+                lines.append(f"    {m}(): {desc}")
 
     lines.append('"""')
     return "\n".join(lines)
 
 
-def _generate_inline_comment(ff: FunctionFeature, fc: FunctionContext) -> Optional[str]:
+def _generate_inline_comment(
+    ff: FunctionFeature,
+    fc: FunctionContext,
+    source_code: str = "",
+) -> Optional[str]:
     """
-    Generate a block comment above a complex function body
-    (used when function has moderate or higher complexity and no docstring).
+    Generate a block comment summarising a complex function body,
+    placed above the function for quick scanning.
     """
     if fc.complexity_label == "simple":
         return None
+
     tokens = _meaningful_tokens(ff.name)
     verb = _pick_verb(tokens)
     noun = " ".join(t for t in tokens if t not in _VERB_MAP).strip() or ff.name
     cc = fc.cyclomatic_complexity
-    return (
-        f"# {verb} {noun}.\n"
-        f"# Cyclomatic complexity: {cc} ({fc.complexity_label}). "
-        f"Contains {ff.loops} loop(s) and {ff.conditionals} conditional(s)."
+
+    parts = [f"# {verb} {noun}."]
+
+    # Add a brief one-liner body summary
+    body_parts: List[str] = []
+    if ff.loops:
+        body_parts.append(f"{ff.loops} loop(s)")
+    if ff.conditionals:
+        body_parts.append(f"{ff.conditionals} conditional(s)")
+    if fc.calls_internal:
+        body_parts.append(f"calls {', '.join(fc.calls_internal[:2])}")
+    if body_parts:
+        parts.append("# Body: " + ", ".join(body_parts) + ".")
+
+    parts.append(
+        f"# Cyclomatic complexity: {cc} ({fc.complexity_label})."
     )
+
+    if source_code:
+        raises = extract_raises(source_code, ff.lineno, ff.lineno + ff.body_lines)
+        if raises:
+            parts.append(f"# May raise: {', '.join(raises[:3])}.")
+
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — Rule-Based
 # ---------------------------------------------------------------------------
 
 def generate_comments(
     module_features: ModuleFeatures,
     context_graph: ContextGraph,
+    source_code: str = "",
 ) -> List[CommentItem]:
+    """
+    Generate AST-driven docstrings and inline comments for all undocumented
+    functions and classes in a module.
 
+    Args:
+        module_features: Output of ast_extractor.extract_features().
+        context_graph:   Output of context_analyzer.analyze_context().
+        source_code:     Raw source string — used for body/raises analysis.
+
+    Returns:
+        List[CommentItem] sorted by line number.
+    """
     comments: List[CommentItem] = []
 
     # Build quick lookup: function name -> FunctionContext
@@ -272,7 +560,7 @@ def generate_comments(
     # --- Classes ---
     for cf in module_features.classes:
         if not cf.has_docstring:
-            doc_text = _generate_class_docstring(cf)
+            doc_text = _generate_class_docstring(cf, source_code)
             comments.append(CommentItem(
                 node_id=cf.node_id,
                 node_type="class",
@@ -288,7 +576,7 @@ def generate_comments(
         fc = fc_map.get(ff.name)
 
         if not ff.has_docstring:
-            doc_text = _generate_function_docstring(ff, fc)
+            doc_text = _generate_function_docstring(ff, fc, source_code)
             comments.append(CommentItem(
                 node_id=ff.node_id,
                 node_type="function",
@@ -301,7 +589,7 @@ def generate_comments(
 
         # Inline block comment for moderate/complex/very_complex functions
         if fc and fc.complexity_label != "simple":
-            inline = _generate_inline_comment(ff, fc)
+            inline = _generate_inline_comment(ff, fc, source_code)
             if inline:
                 comments.append(CommentItem(
                     node_id=ff.node_id + "_inline",
@@ -319,74 +607,50 @@ def generate_comments(
 
 
 # ---------------------------------------------------------------------------
-# ML-enhanced API (Week 9)
+# Public API — ML-Enhanced (AST Features → T5 NLP Model)
 # ---------------------------------------------------------------------------
 
 def ml_generate_comments(
     module_features: ModuleFeatures,
     context_graph: ContextGraph,
-    model_selector=None,
+    ast_model=None,
     source_code: str = "",
 ) -> List[CommentItem]:
     """
-    Generate comments using the ML ModelSelector when available.
+    Generate comments using ASTCommentModel — T5 fine-tuned on structured
+    AST features.
 
-    For each function without a docstring:
-      1. Extract its feature vector.
-      2. First obtain the rule-based comment as a fallback.
-      3. Ask the ModelSelector to predict; use its output if confidence ≥ threshold.
-      4. Wrap the result in a CommentItem (same format as generate_comments).
-
-    For complex functions (complexity ≥ 3, body ≥ 8 lines), also generates
-    inline `# comments` above significant code blocks using BlockCommenter.
-
-    Falls back to the pure rule-based generate_comments() if no
-    ModelSelector is provided or if a model error occurs.
+    For each undocumented function:
+      1. Get FunctionFeature (loops, conditionals, params, decorators …)
+         and FunctionContext (complexity, calls, variable types …).
+      2. Extract raises from source_code via ast_body_extractor.
+      3. Call  ASTCommentModel.generate(ff, fc, raises)
+         — the model receives ONLY structured AST feature objects,
+           never raw source code or the function name alone.
+      4. Fall back to the AST rule-based engine if the model is unavailable
+         or if generation fails.
 
     Args:
         module_features: Output of ast_extractor.extract_features().
         context_graph:   Output of context_analyzer.analyze_context().
-        model_selector:  A ModelSelector instance (or None).
-        source_code:     Raw source string of the module (for block extraction).
+        ast_model:       A loaded ASTCommentModel instance (or None).
+        source_code:     Raw source string — used only for raises extraction.
 
     Returns:
         List[CommentItem] sorted by line number.
     """
-    if model_selector is None or not model_selector.is_ready():
-        return generate_comments(module_features, context_graph)
-
-    try:
-        from .ml.feature_vectors import extract_feature_vector
-    except ImportError:
-        return generate_comments(module_features, context_graph)
-
-    # Set up block commenter if source code is available and CodeT5 is loaded
-    block_commenter = None
-    if source_code:
-        try:
-            from .ml.block_commenter import BlockCommenter
-            codet5 = getattr(model_selector, "codet5_model", None)
-            if codet5 is not None:
-                block_commenter = BlockCommenter(codet5)
-        except Exception:
-            pass
-
-    # First generate rule-based comments to get fallback text
-    rule_comments = generate_comments(module_features, context_graph)
-    rule_map: Dict[str, CommentItem] = {
-        c.target_name: c for c in rule_comments if c.kind == "docstring"
-    }
+    if ast_model is None:
+        return generate_comments(module_features, context_graph, source_code)
 
     fc_map: Dict[str, FunctionContext] = {
         fc.name: fc for fc in context_graph.function_contexts
     }
-
     comments: List[CommentItem] = []
 
-    # ------ Classes (rule-based for now; ML focuses on functions) ----------
+    # --- Classes (always rule-based) ----------------------------------------
     for cf in module_features.classes:
         if not cf.has_docstring:
-            doc_text = _generate_class_docstring(cf)
+            doc_text = _generate_class_docstring(cf, source_code)
             comments.append(CommentItem(
                 node_id=cf.node_id,
                 node_type="class",
@@ -397,45 +661,37 @@ def ml_generate_comments(
                 target_name=cf.name,
             ))
 
-    # ------ Functions — ML prediction ------------------------------------
+    # --- Functions — AST features → T5 model --------------------------------
     for ff in module_features.functions:
         fc = fc_map.get(ff.name)
 
         if not ff.has_docstring:
-            fallback_item = rule_map.get(ff.name)
-            fallback_text = fallback_item.text if fallback_item else None
+            # Extract raises from source (only AST structural info used)
+            raises: List[str] = []
+            if source_code:
+                try:
+                    end_line = ff.lineno + ff.body_lines
+                    raises = extract_raises(source_code, ff.lineno, end_line)
+                except Exception:
+                    raises = []
 
-            # Build a function signature string for CodeT5
+            doc_text = None
             try:
-                real_params = [p for p in ff.params if p.name not in ("self", "cls")]
-                param_parts = []
-                for p in ff.params:
-                    part = p.name
-                    if p.annotation:
-                        part += f": {p.annotation}"
-                    if p.default is not None:
-                        part += f" = {p.default}"
-                    param_parts.append(part)
-                sig = f"def {ff.name}({', '.join(param_parts)})"
-                if ff.return_annotation and ff.return_annotation != "None":
-                    sig += f" -> {ff.return_annotation}"
-                sig += ":"
-            except Exception:
-                sig = f"def {ff.name}():"
+                # ── KEY: T5 model receives AST feature OBJECTS, not source ──
+                raw_text, confidence = ast_model.generate(ff, fc, raises)
 
-            try:
-                feat_vec = extract_feature_vector(ff, fc)
-                ml_text, source, confidence = model_selector.predict(
-                    ff.name, feat_vec,
-                    fallback=fallback_text,
-                    func_signature=sig,
-                )
-                # Ensure it looks like a proper docstring
-                if not ml_text.strip().startswith('"""'):
-                    ml_text = f'"""{ml_text.strip()}"""'
-                doc_text = ml_text
+                # Augment the ML summary with Args:/Returns:/Raises: sections
+                # (the model produces a summary sentence; we add the structured
+                # sections from the AST extractor for completeness)
+                summary = raw_text.strip().strip('"""').strip()
+                doc_lines = build_full_docstring(summary, ff, fc, source_code, raises)
+                doc_text = doc_lines
             except Exception:
-                doc_text = fallback_text or _generate_function_docstring(ff, fc)
+                pass
+
+            if not doc_text:
+                # Fallback to rule-based if model failed
+                doc_text = _generate_function_docstring(ff, fc, source_code)
 
             comments.append(CommentItem(
                 node_id=ff.node_id,
@@ -447,27 +703,9 @@ def ml_generate_comments(
                 target_name=ff.name,
             ))
 
-
-        # Inline block comments for moderate/complex/very_complex functions
-        if source_code and block_commenter and fc:
-            # BlockCommenter handles the complexity threshold internally
-            try:
-                block_comments = block_commenter.generate(source_code, ff, fc)
-                for lineno, col_offset, comment_text in block_comments:
-                    comments.append(CommentItem(
-                        node_id=ff.node_id + f"_block_{lineno}",
-                        node_type="inline",
-                        lineno=lineno,
-                        col_offset=col_offset,  # actual block indentation
-                        text=comment_text,
-                        kind="inline",
-                        target_name=ff.name,
-                    ))
-            except Exception:
-                pass
-        elif fc and fc.complexity_label != "simple":
-            # Fallback to rule-based inline comment
-            inline = _generate_inline_comment(ff, fc)
+        # Inline block comment for moderate/complex functions
+        if fc and fc.complexity_label != "simple":
+            inline = _generate_inline_comment(ff, fc, source_code)
             if inline:
                 comments.append(CommentItem(
                     node_id=ff.node_id + "_inline",
@@ -481,3 +719,52 @@ def ml_generate_comments(
 
     comments.sort(key=lambda c: (c.lineno, c.kind))
     return comments
+
+
+def build_full_docstring(
+    summary: str,
+    ff,
+    fc,
+    source_code: str = "",
+    raises: Optional[List[str]] = None,
+) -> str:
+    """
+    Assemble a complete Google-style docstring by combining:
+      - An ML-generated summary line.
+      - Args: / Returns: / Raises: sections derived from AST features.
+
+    This ensures the structured, accurate sections always come from AST
+    while the natural-language summary comes from the NLP model.
+    """
+    noun_phrase = _humanize(ff.name)
+    real_params = [p for p in ff.params if p.name not in ("self", "cls")]
+
+    lines = ['"""', summary if summary else _humanize_verb(ff.name)]
+
+    # Args
+    if real_params:
+        lines.append("")
+        lines.append("Args:")
+        for p in real_params:
+            ann     = f" ({p.annotation})" if p.annotation else ""
+            default = f", defaults to ``{p.default}``" if p.default is not None else ""
+            lines.append(f"    {p.name}{ann}: {_humanize(p.name)}{default}.")
+
+    # Returns
+    ret_ann = ff.return_annotation
+    if ret_ann and ret_ann not in ("None", "none"):
+        lines.append("")
+        lines.append("Returns:")
+        lines.append(f"    {ret_ann}: The {noun_phrase} result.")
+
+    # Raises
+    if raises:
+        lines.append("")
+        lines.append("Raises:")
+        for exc in raises[:4]:
+            lines.append(f"    {exc}: If an error occurs during {noun_phrase}.")
+
+    lines.append('"""')
+    return "\n".join(lines)
+
+

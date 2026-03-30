@@ -167,7 +167,7 @@ class TestCommentGenerator(unittest.TestCase):
         tree = parse_code(code)
         mf = extract_features(tree, source_code=code)
         cg = analyze_context(mf, tree, code)
-        return generate_comments(mf, cg)
+        return generate_comments(mf, cg, source_code=code)  # pass source_code!
 
     def test_generates_comment_for_undocumented_function(self):
         comments = self._generate(SIMPLE_CODE)
@@ -218,6 +218,176 @@ class TestCommentGenerator(unittest.TestCase):
         self.assertEqual(lines, sorted(lines))
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AST-Driven Comment Tests  (verifies body analysis features work)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LOOP_CODE = """\
+def process_items(items: list, threshold: int = 5) -> dict:
+    result = {}
+    for item in items:
+        if item > threshold:
+            result[item] = item * 2
+        elif item == 0:
+            raise ValueError("Zero not allowed")
+    return result
+"""
+
+DECORATOR_CODE = """\
+class Config:
+    @property
+    def value(self):
+        return self._value
+
+    @staticmethod
+    def defaults():
+        return {}
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        obj = cls()
+        return obj
+"""
+
+ASYNC_CODE = """\
+async def fetch_data(url: str) -> dict:
+    result = await some_client.get(url)
+    if result is None:
+        raise ConnectionError("No response")
+    return result
+"""
+
+
+class TestASTDrivenComments(unittest.TestCase):
+    """
+    Verifies that generate_comments() uses AST features — not just the
+    function name — to produce meaningful docstring content.
+    """
+
+    def _generate(self, code: str):
+        tree = parse_code(code)
+        mf   = extract_features(tree, source_code=code)
+        cg   = analyze_context(mf, tree, code)
+        return generate_comments(mf, cg, source_code=code)
+
+    # ── Loop / conditional detection ────────────────────────────────────────
+
+    def test_loop_mentioned_in_docstring(self):
+        """A function with a for-loop should say 'Iterates over' in its docstring."""
+        comments = self._generate(LOOP_CODE)
+        func_doc = next(
+            (c for c in comments if c.target_name == "process_items" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(func_doc)
+        self.assertIn("Iterates", func_doc.text)
+
+    def test_conditional_mentioned_in_docstring(self):
+        """A function with branches should say 'conditional' in its docstring."""
+        comments = self._generate(LOOP_CODE)
+        func_doc = next(
+            (c for c in comments if c.target_name == "process_items" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(func_doc)
+        self.assertIn("conditional", func_doc.text)
+
+    # ── Raises detection ────────────────────────────────────────────────────
+
+    def test_raises_mentioned_in_docstring(self):
+        """A function that raises ValueError should document it."""
+        comments = self._generate(LOOP_CODE)
+        func_doc = next(
+            (c for c in comments if c.target_name == "process_items" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(func_doc)
+        self.assertIn("ValueError", func_doc.text)
+
+    def test_raises_section_present(self):
+        """The Raises: section should appear when exceptions are raised."""
+        comments = self._generate(LOOP_CODE)
+        func_doc = next(
+            (c for c in comments if c.target_name == "process_items" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(func_doc)
+        self.assertIn("Raises:", func_doc.text)
+
+    # ── Return type inference ────────────────────────────────────────────────
+
+    def test_return_section_uses_annotation(self):
+        """Return annotation 'dict' should appear in the Returns: section."""
+        comments = self._generate(LOOP_CODE)
+        func_doc = next(
+            (c for c in comments if c.target_name == "process_items" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(func_doc)
+        self.assertIn("Returns:", func_doc.text)
+        self.assertIn("dict", func_doc.text)
+
+    # ── Async detection ─────────────────────────────────────────────────────
+
+    def test_async_mentioned_in_summary(self):
+        """Async functions should have 'Asynchronously' in the summary line."""
+        comments = self._generate(ASYNC_CODE)
+        func_doc = next(
+            (c for c in comments if c.target_name == "fetch_data" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(func_doc)
+        self.assertIn("synchronous", func_doc.text.lower())
+
+    # ── Decorator detection ─────────────────────────────────────────────────
+
+    def test_property_decorator_mentioned(self):
+        """@property methods should say 'property accessor' in their docstring."""
+        comments = self._generate(DECORATOR_CODE)
+        prop_doc = next(
+            (c for c in comments if c.target_name == "value" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(prop_doc)
+        self.assertIn("property", prop_doc.text.lower())
+
+    def test_staticmethod_decorator_mentioned(self):
+        """@staticmethod methods should say 'static method'."""
+        comments = self._generate(DECORATOR_CODE)
+        doc = next(
+            (c for c in comments if c.target_name == "defaults" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(doc)
+        self.assertIn("static method", doc.text.lower())
+
+    # ── Inline block comment ────────────────────────────────────────────────
+
+    def test_inline_body_summary_included(self):
+        """Inline comment for a complex function should mention loop/conditional count."""
+        comments = self._generate(LOOP_CODE)
+        inline = next(
+            (c for c in comments if c.target_name == "process_items" and c.kind == "inline"),
+            None
+        )
+        # process_items has CC=4 (moderate), should get an inline comment
+        if inline is not None:   # only present when complexity is moderate+
+            self.assertIn("loop", inline.text.lower())
+
+    # ── Data structure detection ────────────────────────────────────────────
+
+    def test_data_structure_mentioned(self):
+        """A function that builds a dict should mention it in the docstring."""
+        comments = self._generate(LOOP_CODE)
+        func_doc = next(
+            (c for c in comments if c.target_name == "process_items" and c.kind == "docstring"),
+            None
+        )
+        self.assertIsNotNone(func_doc)
+        # 'dict' should appear in the docstring (return annotation or data structures)
+        self.assertIn("dict", func_doc.text)
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Comment Attacher Tests
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -228,7 +398,7 @@ class TestCommentAttacher(unittest.TestCase):
         tree = parse_code(code)
         mf = extract_features(tree, source_code=code)
         cg = analyze_context(mf, tree, code)
-        comments = generate_comments(mf, cg)
+        comments = generate_comments(mf, cg, source_code=code)  # pass source_code!
         return attach_comments(code, comments)
 
     def test_annotated_source_is_string(self):

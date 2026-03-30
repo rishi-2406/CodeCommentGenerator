@@ -1,301 +1,233 @@
 """
-Trainer — Week 9 ML  (updated with CodeT5)
-===========================================
-End-to-end training pipeline:
-  1. Build corpus from stdlib + installed packages + seed corpus
-  2. Train/test split (80/20)
-  3. Train TFIDFCommentModel
-  4. Fit TemplateRankingModel
-  5. Fine-tune CodeT5Model on the full corpus
-  6. Evaluate all three on the test split
-  7. Save models + JSON reports to output_dir
+Trainer — AST-Feature NLP Comment Generation
+=============================================
+End-to-end pipeline:
+  1. Build (AST feature text, docstring) corpus from CodeSearchNet + stdlib
+  2. Train/validation split
+  3. Fine-tune ASTCommentModel (T5-small) on AST features → docstrings
+  4. Evaluate with BLEU-4, ROUGE-L, exact-match on holdout split
+  5. Save model + JSON reports
 
-Usage (from week9/ root):
+Usage:
     python3 -m src.main --train
-    python3 -m src.main --train --output-dir outputs/model
+    python3 -m src.main --train --output-dir outputs/
+    python3 -m src.main --train --epochs 3 --batch-size 8
 """
 import json
-import os
 import pathlib
 import random
 from typing import List, Optional
 
-from .dataset import build_dataset, Dataset, DataPoint
-from .tfidf_model import TFIDFCommentModel
-from .seq2seq_model import TemplateRankingModel
-from .model_selector import ModelSelector
-from .evaluator import evaluate_dataset, EvalReport
-from .corpus_builder import build_full_corpus, CorpusEntry, save_corpus
-from .block_corpus_builder import build_block_corpus, save_block_corpus, BlockEntry
+from .ast_dataset_builder import (
+    build_full_dataset, save_dataset, ASTTrainPair, build_stdlib_dataset
+)
+from .evaluator import compute_bleu, compute_rouge, compute_exact_match, EvalReport
+
+import numpy as np
 
 
-def _split_dataset(dataset: Dataset, test_ratio: float = 0.2, seed: int = 42):
-    from .dataset import Dataset as DS
-    points = list(dataset.points)
-    random.seed(seed)
-    random.shuffle(points)
-    split_idx = max(1, int(len(points) * (1 - test_ratio)))
-    return DS(points=points[:split_idx]), DS(points=points[split_idx:])
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-
-def _split_corpus(corpus: List[CorpusEntry], test_ratio: float = 0.2, seed: int = 42):
-    data = list(corpus)
+def _split(pairs: List[ASTTrainPair], test_ratio: float = 0.1, seed: int = 42):
+    data = list(pairs)
     random.seed(seed)
     random.shuffle(data)
-    split_idx = max(1, int(len(data) * (1 - test_ratio)))
-    return data[:split_idx], data[split_idx:]
+    split = max(1, int(len(data) * (1 - test_ratio)))
+    return data[:split], data[split:]
 
+
+def _evaluate_model(model, test_pairs: List[ASTTrainPair], cap: int = 200) -> dict:
+    """
+    Evaluate ASTCommentModel on a holdout set.
+
+    Uses generate_from_feature_text() so evaluation is identical to training:
+    the model only sees formatted AST features, never raw source.
+    """
+    bleu, rouge, em, per_fn = [], [], [], []
+    for p in test_pairs[:cap]:
+        try:
+            pred, conf = model.generate_from_feature_text(p.input_text)
+            pred_clean = pred.strip('"""').strip()
+        except Exception:
+            pred_clean, conf = "", 0.0
+
+        b = compute_bleu(p.target_text, pred_clean)
+        r = compute_rouge(p.target_text, pred_clean)
+        e = compute_exact_match(p.target_text, pred_clean)
+        bleu.append(b); rouge.append(r); em.append(e)
+        per_fn.append({
+            "func_name":   p.func_name,
+            "reference":   p.target_text[:120],
+            "hypothesis":  pred_clean[:120],
+            "bleu4":       round(b, 4),
+            "rouge_l":     round(r, 4),
+            "exact_match": int(e),
+            "confidence":  round(conf, 4),
+        })
+
+    return {
+        "n_samples":       len(bleu),
+        "bleu4_mean":      round(float(np.mean(bleu)), 4)  if bleu else 0.0,
+        "bleu4_std":       round(float(np.std(bleu)), 4)   if bleu else 0.0,
+        "rouge_l_mean":    round(float(np.mean(rouge)), 4) if rouge else 0.0,
+        "rouge_l_std":     round(float(np.std(rouge)), 4)  if rouge else 0.0,
+        "exact_match_rate":round(float(np.mean(em)), 4)    if em else 0.0,
+        "per_function":    per_fn,
+    }
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def train_and_evaluate(
     output_dir: str = "outputs",
-    extra_files: Optional[List[str]] = None,
-    test_ratio: float = 0.2,
-    cv_folds: int = 5,
-    codet5_epochs: int = 8,   # GPU default (use 4 for CPU-only)
-    codet5_batch_size: int = 16,
-    block_max_pairs: int = 20000,   # block-level (code block → inline comment)
+    include_codesearchnet: bool = True,
+    include_stdlib: bool = True,
+    codesearchnet_max: int = 30_000,
+    max_stdlib_files: int = 500,
+    test_ratio: float = 0.1,
+    epochs: int = 4,
+    batch_size: int = 16,
+    lr: float = 3e-4,
     verbose: bool = True,
 ) -> dict:
     """
-    Full training and evaluation pipeline including CodeT5 fine-tuning.
+    Full AST-feature NLP training pipeline.
+
+    Trains T5-small to map structured AST feature text → natural-language
+    docstrings.  The model never sees raw source code; its ONLY input is
+    the structured AST extraction.
 
     Args:
-        output_dir:        Where models + reports are saved.
-        extra_files:       Additional .py files to augment the corpus.
-        test_ratio:        Fraction of data for evaluation.
-        cv_folds:          CV folds for TFIDFCommentModel.
-        codet5_epochs:     Fine-tuning epochs for CodeT5 (3 recommended).
-        codet5_batch_size: Batch size for CodeT5 (reduce to 4 if OOM).
-        verbose:           Print progress.
+        output_dir:            Directory to save model + reports.
+        include_codesearchnet: Download CodeSearchNet from HuggingFace.
+        include_stdlib:        Crawl Python stdlib as offline supplement.
+        codesearchnet_max:     Max samples from CodeSearchNet.
+        max_stdlib_files:      Max stdlib .py files to crawl.
+        test_ratio:            Holdout fraction for evaluation.
+        epochs:                Fine-tuning epochs.
+        batch_size:            Mini-batch size (reduce to 4 if OOM).
+        lr:                    Learning rate.
+        verbose:               Print progress.
 
     Returns:
-        dict with training_report and eval_report.
+        dict with ``training_report`` and ``eval_report``.
     """
-    model_dir = pathlib.Path(output_dir) / "model"
+    model_dir = pathlib.Path(output_dir) / "model" / "ast_model"
     model_dir.mkdir(parents=True, exist_ok=True)
+    out_dir   = pathlib.Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     def _log(msg):
         if verbose:
             print(f"  [trainer] {msg}")
 
-    # ── 1. Build dataset (for TF-IDF features model) ──────────────────────────
-    _log("Building feature dataset (seed corpus) …")
-    dataset = build_dataset(extra_source_files=extra_files)
-    _log(f"  Feature dataset: {len(dataset)} samples")
-
-    if len(dataset) < 2:
-        raise RuntimeError("Dataset too small (<2 samples).")
-
-    train_ds, test_ds = _split_dataset(dataset, test_ratio=test_ratio)
-
-    # ── 2. Build function-level corpus (for CodeT5 fine-tuning) ──────────────
-    _log("Building function-level corpus from stdlib + packages …")
-    func_corpus = build_full_corpus(
-        include_stdlib=True,
-        include_packages=True,
-        include_codesearchnet=True,
+    # ── 1. Build dataset ──────────────────────────────────────────────────────
+    _log("Building AST feature dataset …")
+    pairs = build_full_dataset(
+        include_codesearchnet=include_codesearchnet,
+        include_stdlib=include_stdlib,
+        codesearchnet_max=codesearchnet_max,
+        max_stdlib_files=max_stdlib_files,
         verbose=verbose,
     )
-    _log(f"  Function corpus: {len(func_corpus)} pairs")
 
-    # ── 2b. Build block-level corpus (code block → inline comment) ────────────
-    _log(f"Building block-level corpus (target: {block_max_pairs} pairs) …")
-    block_corpus_raw = build_block_corpus(
-        max_files=10000,
-        max_pairs=block_max_pairs,
-        verbose=verbose,
-    )
-    # Convert BlockEntry → CorpusEntry so they can be mixed into one training set
-    block_as_corpus = [
-        CorpusEntry(
-            func_name=e.block_type,
-            input_text=e.input_text,
-            target_text=e.target_text,
-        )
-        for e in block_corpus_raw
-    ]
-    _log(f"  Block corpus: {len(block_as_corpus)} pairs")
+    if len(pairs) < 10:
+        # Absolute fallback: use stdlib only (always offline-available)
+        _log("  Few samples found — falling back to stdlib-only dataset.")
+        pairs = build_stdlib_dataset(max_files=500, verbose=verbose)
 
-    # Save block corpus separately for instructor inspection
-    save_block_corpus(block_corpus_raw, output_dir=output_dir, base_name="block_corpus")
+    if len(pairs) < 2:
+        raise RuntimeError("Dataset too small (< 2 samples). Check your environment.")
 
-    # Merge corpora
-    full_corpus = func_corpus + block_as_corpus
-    train_corpus, test_corpus = _split_corpus(full_corpus, test_ratio=test_ratio)
-    _log(f"  Combined corpus — train: {len(train_corpus)}  test: {len(test_corpus)}")
+    _log(f"Total dataset size: {len(pairs)} pairs")
 
-    # Save combined corpus to disk for inspection
-    corpus_info = save_corpus(full_corpus, output_dir=output_dir, base_name="training_corpus")
-    _log(f"  Combined corpus saved: {corpus_info['total_samples']} samples → {corpus_info['json_path']}")
+    # Save for inspection
+    corpus_info = save_dataset(pairs, output_dir=output_dir)
+    _log(f"Dataset saved → {corpus_info['json_path']}")
 
-    # ── 3. Train TFIDFCommentModel ────────────────────────────────────────────
-    _log("Training TF-IDF + Logistic Regression model …")
-    tfidf_model = TFIDFCommentModel()
-    effective_folds = min(cv_folds, len(train_ds))
-    tfidf_train_meta = tfidf_model.train(train_ds, cv_folds=effective_folds)
-    cv_acc = tfidf_train_meta.get("cv_accuracy_mean")
-    _log(f"  TF-IDF CV accuracy: {cv_acc:.4f}" if cv_acc else "  TF-IDF CV accuracy: N/A")
+    train_pairs, test_pairs = _split(pairs, test_ratio=test_ratio)
+    _log(f"Split: train={len(train_pairs)}  test={len(test_pairs)}")
 
-    # ── 4. Fit TemplateRankingModel ───────────────────────────────────────────
-    _log("Fitting template-ranking model …")
-    template_model = TemplateRankingModel()
-    template_model.fit()
+    # ── 2. Fine-tune ASTCommentModel ──────────────────────────────────────────
+    training_meta = {"model": "ASTCommentModel", "error": "not attempted"}
+    ast_model     = None
 
-    # ── 5. Fine-tune CodeT5 ───────────────────────────────────────────────────
-    codet5_model = None
-    codet5_train_meta = {"model": "CodeT5Model", "error": "not attempted"}
     try:
-        from .codet5_model import CodeT5Model
-        _log(f"Fine-tuning CodeT5 on {len(train_corpus)} samples …")
-        codet5_model = CodeT5Model()
-        codet5_train_meta = codet5_model.fine_tune(
-            train_corpus,
-            epochs=codet5_epochs,
-            batch_size=codet5_batch_size,
+        from .ast_comment_model import ASTCommentModel
+        _log(f"Fine-tuning ASTCommentModel on {len(train_pairs)} pairs …")
+        ast_model = ASTCommentModel()
+        training_meta = ast_model.fine_tune(
+            train_pairs,
+            epochs=epochs,
+            batch_size=batch_size,
+            lr=lr,
             verbose=verbose,
         )
-    except ImportError as e:
-        _log(f"  [skip] CodeT5 unavailable: {e}")
-        codet5_train_meta = {"model": "CodeT5Model", "error": str(e)}
-    except Exception as e:
-        _log(f"  [warn] CodeT5 training error: {e}")
-        codet5_train_meta = {"model": "CodeT5Model", "error": str(e)}
-        codet5_model = None
+    except ImportError as exc:
+        _log(f"[skip] transformers/torch not installed: {exc}")
+        training_meta["error"] = str(exc)
+    except Exception as exc:
+        _log(f"[warn] Training error: {exc}")
+        training_meta["error"] = str(exc)
+        ast_model = None
 
-    # ── 6. Evaluate all models ────────────────────────────────────────────────
-    _log("Evaluating on test split …")
-    tfidf_eval  = evaluate_dataset(tfidf_model,    test_ds, model_name="TFIDFCommentModel")
-    tmpl_eval   = evaluate_dataset(template_model, test_ds, model_name="TemplateRankingModel")
-
-    codet5_eval_dict = None
-    if codet5_model is not None and test_corpus:
-        # Evaluate CodeT5 on the corpus test split using CorpusEntry objects
-        from .evaluator import compute_bleu, compute_rouge, compute_exact_match, EvalReport
-        import numpy as np
-        bleu_scores, rouge_scores, em_scores, per_fn = [], [], [], []
-        for entry in test_corpus[:50]:  # cap at 50 for speed
-            try:
-                pred, conf = codet5_model.generate(entry.input_text.replace("Summarize Python: ", ""))
-                # Strip docstring quotes for metric computation
-                pred_clean = pred.strip('"""').strip()
-            except Exception:
-                pred_clean, conf = "", 0.0
-            b = compute_bleu(entry.target_text,  pred_clean)
-            r = compute_rouge(entry.target_text, pred_clean)
-            e = compute_exact_match(entry.target_text, pred_clean)
-            bleu_scores.append(b); rouge_scores.append(r); em_scores.append(e)
-            per_fn.append({
-                "func_name":   entry.func_name,
-                "reference":   entry.target_text[:120],
-                "hypothesis":  pred_clean[:120],
-                "bleu4":       round(b, 4),
-                "rouge_l":     round(r, 4),
-                "exact_match": int(e),
-                "confidence":  round(conf, 4),
-            })
-        codet5_eval_report = EvalReport(
-            model_name="CodeT5Model",
-            n_samples=len(bleu_scores),
-            bleu4_mean=float(np.mean(bleu_scores)) if bleu_scores else 0.0,
-            bleu4_std=float(np.std(bleu_scores)) if bleu_scores else 0.0,
-            rouge_l_mean=float(np.mean(rouge_scores)) if rouge_scores else 0.0,
-            rouge_l_std=float(np.std(rouge_scores)) if rouge_scores else 0.0,
-            exact_match_rate=float(np.mean(em_scores)) if em_scores else 0.0,
-            per_function=per_fn,
+    # ── 3. Evaluate ───────────────────────────────────────────────────────────
+    eval_report_dict = None
+    if ast_model is not None and test_pairs:
+        _log(f"Evaluating on {min(len(test_pairs), 200)} test samples …")
+        eval_report_dict = _evaluate_model(ast_model, test_pairs)
+        _log(
+            f"  BLEU-4  = {eval_report_dict['bleu4_mean']:.4f} "
+            f"  ROUGE-L = {eval_report_dict['rouge_l_mean']:.4f} "
+            f"  EM      = {eval_report_dict['exact_match_rate']:.4f}"
         )
-        codet5_eval_dict = codet5_eval_report.to_dict()
-        _log(f"  CodeT5 BLEU-4={codet5_eval_report.bleu4_mean:.4f}  "
-             f"ROUGE-L={codet5_eval_report.rouge_l_mean:.4f}")
 
-    # ── 7. Save models ────────────────────────────────────────────────────────
-    tfidf_model.save(str(model_dir / "tfidf_model.pkl"))
-    template_model.save(str(model_dir / "template_model.pkl"))
-    if codet5_model is not None:
-        codet5_model.save(str(model_dir / "codet5"))
-    _log(f"  Models saved to {model_dir}/")
+    # ── 4. Save model ─────────────────────────────────────────────────────────
+    if ast_model is not None:
+        ast_model.save(str(model_dir))
+        _log(f"Model saved → {model_dir}/")
 
-    # ── 8. Build reports ──────────────────────────────────────────────────────
+    # ── 5. Write report JSONs ─────────────────────────────────────────────────
     training_report = {
-        "dataset_total": len(dataset),
-        "train_size":    len(train_ds),
-        "test_size":     len(test_ds),
-        "corpus_total":  len(full_corpus),
-        "corpus_train":  len(train_corpus),
-        "corpus_test":   len(test_corpus),
-        "tfidf_model":   tfidf_train_meta,
-        "template_model": template_model.training_report(),
-        "codet5_model":  codet5_train_meta,
+        "dataset_total":  len(pairs),
+        "train_size":     len(train_pairs),
+        "test_size":      len(test_pairs),
+        "ast_model":      training_meta,
+        "input_format":   "structured AST features (ast_feature_formatter)",
+        "target_format":  "first sentence of function docstring",
+        "source":         ["CodeSearchNet Python (HF)", "Python stdlib"],
     }
 
-    all_bleu  = [tfidf_eval.bleu4_mean, tmpl_eval.bleu4_mean]
-    all_rouge = [tfidf_eval.rouge_l_mean, tmpl_eval.rouge_l_mean]
-    all_em    = [tfidf_eval.exact_match_rate, tmpl_eval.exact_match_rate]
-    if codet5_eval_dict:
-        all_bleu.append(codet5_eval_dict["bleu4"]["mean"])
-        all_rouge.append(codet5_eval_dict["rouge_l"]["mean"])
-        all_em.append(codet5_eval_dict["exact_match_rate"])
-
-    eval_report = {
-        "tfidf_model":    tfidf_eval.to_dict(),
-        "template_model": tmpl_eval.to_dict(),
-        "codet5_model":   codet5_eval_dict,
+    full_eval_report = {
+        "ast_model":     eval_report_dict,
         "summary": {
-            "best_bleu4":       max(all_bleu),
-            "best_rouge_l":     max(all_rouge),
-            "best_exact_match": max(all_em),
-            "corpus_size":      len(full_corpus),
+            "bleu4_mean":       eval_report_dict["bleu4_mean"] if eval_report_dict else 0.0,
+            "rouge_l_mean":     eval_report_dict["rouge_l_mean"] if eval_report_dict else 0.0,
+            "exact_match_rate": eval_report_dict["exact_match_rate"] if eval_report_dict else 0.0,
+            "dataset_size":     len(pairs),
         },
     }
 
-    reports_dir = pathlib.Path(output_dir)
-    with open(reports_dir / "training_report.json", "w") as f:
+    with open(out_dir / "training_report.json", "w") as f:
         json.dump(training_report, f, indent=2)
-    with open(reports_dir / "eval_report.json", "w") as f:
-        json.dump(eval_report, f, indent=2)
-    _log(f"  Reports saved to {output_dir}/")
+    with open(out_dir / "eval_report.json", "w") as f:
+        json.dump(full_eval_report, f, indent=2)
+    _log(f"Reports saved → {output_dir}/")
 
-    return {"training_report": training_report, "eval_report": eval_report}
+    return {"training_report": training_report, "eval_report": full_eval_report}
 
 
-def load_model_selector(output_dir: str = "outputs",
-                        min_confidence: float = 0.05) -> ModelSelector:
+def load_ast_model(output_dir: str = "outputs") -> Optional["ASTCommentModel"]:
     """
-    Load saved models and return a ModelSelector (CodeT5 > TF-IDF > Template).
-    If no saved models exist, trains inline.
+    Load the saved ASTCommentModel. Returns None if transformers unavailable
+    or if no saved model exists yet.
     """
-    model_dir = pathlib.Path(output_dir) / "model"
-    tfidf_model    = None
-    template_model = None
-    codet5_model   = None
-
-    tfidf_path    = model_dir / "tfidf_model.pkl"
-    tmpl_path     = model_dir / "template_model.pkl"
-    codet5_dir    = model_dir / "codet5"
-
-    if tfidf_path.exists():
-        tfidf_model = TFIDFCommentModel.load(str(tfidf_path))
-
-    if tmpl_path.exists():
-        template_model = TemplateRankingModel.load(str(tmpl_path))
-
-    if codet5_dir.exists():
-        try:
-            from .codet5_model import CodeT5Model
-            codet5_model = CodeT5Model.load(str(codet5_dir))
-        except Exception as e:
-            print(f"  [warn] Could not load CodeT5: {e}")
-
-    if tfidf_model is None and template_model is None and codet5_model is None:
-        # Cold start
-        dataset = build_dataset()
-        tfidf_model = TFIDFCommentModel()
-        tfidf_model.train(dataset, cv_folds=min(5, len(dataset)))
-        template_model = TemplateRankingModel()
-        template_model.fit()
-
-    return ModelSelector(
-        tfidf_model=tfidf_model,
-        template_model=template_model,
-        codet5_model=codet5_model,
-        min_confidence=min_confidence,
-    )
+    model_path = pathlib.Path(output_dir) / "model" / "ast_model"
+    if not model_path.exists():
+        return None
+    try:
+        from .ast_comment_model import ASTCommentModel
+        return ASTCommentModel.load(str(model_path))
+    except Exception as exc:
+        print(f"  [trainer] Could not load AST model: {exc}")
+        return None

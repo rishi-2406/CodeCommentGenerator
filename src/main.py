@@ -66,14 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def run_pipeline(filepath: str, logger: PipelineLogger, model_selector=None):
+def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None):
     """
     Execute the full pipeline (Week 7–8 stages + Week 9 ML generation).
 
     Args:
         filepath:       Path to Python source file.
         logger:         PipelineLogger instance.
-        model_selector: Optional ModelSelector for ML-based generation.
+        ast_model:      Optional ASTCommentModel for ML-based generation.
 
     Returns:
         (annotated_source, comments, module_features, context_graph,
@@ -120,15 +120,16 @@ def run_pipeline(filepath: str, logger: PipelineLogger, model_selector=None):
 
     # ── Stage 5: Generate Comments ───────────────────────────────────
     logger.begin_stage("generate")
-    if model_selector is not None and model_selector.is_ready():
+    if ast_model is not None:
         comments = ml_generate_comments(
-            module_features, context_graph, model_selector,
+            module_features, context_graph, ast_model,
             source_code=source_code,
         )
         gen_engine = "ml"
     else:
-        comments = generate_comments(module_features, context_graph)
-        gen_engine = "rule-based"
+        comments = generate_comments(module_features, context_graph,
+                                     source_code=source_code)
+        gen_engine = "rule-based + ast"
     counts = {"docstring": 0, "inline": 0}
     for c in comments:
         counts[c.kind] = counts.get(c.kind, 0) + 1
@@ -222,13 +223,16 @@ def main():
     print(f"  Input : {filepath}")
 
     # ── Load ML model if requested ────────────────────────────────────────
-    model_selector = None
+    ast_model = None
     if args.ml:
         print("  Mode  : ML-enhanced generation (Week 9)")
         try:
-            from .ml.trainer import load_model_selector
-            model_selector = load_model_selector(output_dir=output_dir)
-            print(f"  ML models loaded from: {output_dir}/model/")
+            from .ml.trainer import load_ast_model
+            ast_model = load_ast_model(output_dir=output_dir)
+            if ast_model:
+                print(f"  ML models loaded from: {output_dir}/model/")
+            else:
+                print("  [warn] No fine-tuned AST model found; falling back to rule-based.")
         except Exception as exc:
             print(f"  [warn] Could not load ML models ({exc}); "
                   "falling back to rule-based generation.")
@@ -237,7 +241,7 @@ def main():
 
     try:
         annotated, comments, mf, cg, attach_result, ir_module, analysis_report = \
-            run_pipeline(filepath, logger, model_selector=model_selector)
+            run_pipeline(filepath, logger, ast_model=ast_model)
     except ParserError as e:
         print(f"\n{format_error(e)}")
         sys.exit(1)

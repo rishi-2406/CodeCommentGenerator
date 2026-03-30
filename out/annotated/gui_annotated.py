@@ -22,7 +22,7 @@ DEFAULT_THRESHOLD = 0.75
 
 
 def calculate_discount(price: float, rate: float) -> float:
-    """Calculate the discount rate for a purchase."""
+    """Calculate the discount rate for a given price."""
     if rate < 0 or rate > 1:
         raise ValueError("Rate must be between 0 and 1")
     return price * (1 - rate)
@@ -30,7 +30,7 @@ def calculate_discount(price: float, rate: float) -> float:
 
 
 def find_max_element(numbers: List[float]) -> Optional[float]:
-    """Write a function to find the maximum element in a given list of numbers."""
+    """Write a python function to find the maximum element in a given list of numbers."""
     if not numbers:
         return None
     max_val = numbers[0]
@@ -42,7 +42,7 @@ def find_max_element(numbers: List[float]) -> Optional[float]:
 
 
 def flatten_nested(nested: List) -> List:
-    """Flattens a nested nested list."""
+    """Flattens a nested list of elements."""
     result = []
     for item in nested:
         if isinstance(item, list):
@@ -54,8 +54,8 @@ def flatten_nested(nested: List) -> List:
 
 
 def compute_statistics(data: List[float]) -> Dict[str, float]:
-    """Compute statistics from a dictionary of parameters."""
-    # If the data is not a dictionary, return it.
+    """Compute the statistics of a given data set."""
+    # If the data is not a dictionary, return the dictionary.
     if not data:
         return {}
     n = len(data)
@@ -84,7 +84,7 @@ def validate_email(email: str) -> bool:
 
 
 def generate_matrix(rows: int, cols: int, default: float = 0.0) -> List[List[float]]:
-    """Generate matrix of rows and columns."""
+    """Generates a formatted report from the data."""
     matrix = []
     for i in range(rows):
         row = []
@@ -96,7 +96,7 @@ def generate_matrix(rows: int, cols: int, default: float = 0.0) -> List[List[flo
 
 
 def search_sorted(arr: List[int], target: int) -> int:
-    """Searches records matching the given query."""
+    """Search algorithm for a given value in an array of integers and return the index where value is the target value."""
     low, high = 0, len(arr) - 1
     # while low <= target.
     while low <= high:
@@ -121,6 +121,10 @@ class DataProcessor:
     """
     Represents a Data processor.
     
+    Attributes:
+        batch_size: batch size.
+        threshold: threshold.
+    
     Methods:
         load_data(): Loads data.
         process_batch(): Processes batch.
@@ -137,14 +141,14 @@ class DataProcessor:
 
 
     def __init__(self, name: str, batch_size: int = 32):
-        """Create a class for storing data in the database."""
+        """Initialize attributes based on name and batch size."""
         self.name = name
         self.batch_size = batch_size
         self._cache: Dict = {}
 
 
     def load_data(self, filepath: str) -> List[Dict]:
-        """Loads the data from a file."""
+        """Load the data from a JSON file."""
         with open(filepath, 'r') as f:
             import json
             return json.load(f)
@@ -159,7 +163,7 @@ class DataProcessor:
             if "value" not in item:
                 continue
             value = item["value"]
-            # Check if item is smaller than threshold.
+            # the value is greater than the threshold.
             if value > self.threshold:
                 processed = {"id": item.get("id"), "value": value, "flag": True}
             else:
@@ -174,7 +178,7 @@ class DataProcessor:
 
 
     def set_cache(self, key: str, value: Dict):
-        """Set a cache value."""
+        """Set the value of the cache entry."""
         self._cache[key] = value
 
 
@@ -184,7 +188,7 @@ class DataProcessor:
 
 
     def summarize(self) -> str:
-        """Summarize the summary of all the test cases."""
+        """Generate a data processor."""
         return f"DataProcessor(name={self.name}, batch_size={self.batch_size})"
 
 
@@ -219,7 +223,7 @@ async def fetch_remote_data(url: str, timeout: int = 30) -> Dict:
 
 
 def quicksort(arr: List[int]) -> List[int]:
-    """Quick sort a list of integers using quicksort algorithm."""
+    """Quick sort algorithm in Python."""
     if len(arr) <= 1:
         return arr
     pivot = arr[len(arr) // 2]
@@ -231,7 +235,7 @@ def quicksort(arr: List[int]) -> List[int]:
 
 
 def dfs_traverse(graph: Dict[str, List[str]], start: str, visited: set = None) -> set:
-    """Traverse a graph in depth first search."""
+    """Perform a depth-first search on a given graph."""
     if visited is None:
         visited = set()
     visited.add(start)
@@ -243,7 +247,7 @@ def dfs_traverse(graph: Dict[str, List[str]], start: str, visited: set = None) -
 
 
 def multiply_matrices(A: List[List[float]], B: List[List[float]]) -> List[List[float]]:
-    """Multiply matrices A and B using matrix multiplication."""
+    """Multiply matrices A and B according to matrix B."""
     result = [[0.0 for _ in range(len(B[0]))] for _ in range(len(A))]
     for i in range(len(A)):
         for j in range(len(B[0])):
@@ -254,7 +258,7 @@ def multiply_matrices(A: List[List[float]], B: List[List[float]]) -> List[List[f
 
 
 def custom_lru_cache(capacity: int):
-    """Custom lru cache decorator."""
+    """Decorator to be used to cache data."""
     def decorator(func):
         cache = {}
         order = []
@@ -267,7 +271,7 @@ def custom_lru_cache(capacity: int):
                 return cache[args]
             result = func(*args)
             
-            # Clear the oldest item if available.
+            # Clear the oldest among cache.
             if len(cache) >= capacity:
                 oldest = order.pop(0)
                 del cache[oldest]
@@ -299,7 +303,7 @@ def knapsack_01(weights: List[int], values: List[int], capacity: int) -> int:
 
 
 def dijkstra_shortest_path(graph: Dict[str, Dict[str, int]], start: str) -> Dict[str, int]:
-    """Returns a shortest path for the dijkstra_shortest_path."""
+    """Returns a shortest path for a dijkstra-shortest node."""
     import heapq
     distances = {vertex: float('infinity') for vertex in graph}
     distances[start] = 0
@@ -310,7 +314,7 @@ def dijkstra_shortest_path(graph: Dict[str, Dict[str, int]], start: str) -> Dict
         # skip if current_distance is smaller than current vertex.
         if current_distance > distances[current_vertex]:
             continue
-        # calculate distance between current vertex.
+        # update current vertex.
         for neighbor, weight in graph[current_vertex].items():
             distance = current_distance + weight
             # check if neighbor is nearby.
@@ -322,7 +326,7 @@ def dijkstra_shortest_path(graph: Dict[str, Dict[str, int]], start: str) -> Dict
 
 
 def process_urls_concurrently(urls: List[str], max_workers: int = 4) -> List[Dict]:
-    """Process urls concurrently."""
+    """Fetch URLs concurrently."""
     import concurrent.futures
     import urllib.request
     results = []
@@ -356,10 +360,9 @@ def process_urls_concurrently(urls: List[str], max_workers: int = 4) -> List[Dic
 class TreeNode:
     """
     Represents a Tree node.
-    
     """
     def __init__(self, value: int):
-        """Sets the __init__ attribute of the class."""
+        """Design a class in Python to store the value of an integer."""
         self.value = value
         self.left = None
         self.right = None
@@ -370,16 +373,16 @@ class BinarySearchTree:
     Represents a Binary search tree.
     
     Methods:
-        insert(): Inserts .
+        insert(): Inserts.
         inorder_traversal(): Handles inorder traversal.
     """
     def __init__(self):
-        """Initialize attributes and methods from parent class."""
+        """Initialize the root class."""
         self.root = None
 
 
     def insert(self, value: int):
-        """Inserts a new row into the data structure."""
+        """Insert a value into the tree."""
         if not self.root:
             self.root = TreeNode(value)
         else:
@@ -387,7 +390,7 @@ class BinarySearchTree:
 
 
     def _insert_recursive(self, node: TreeNode, value: int):
-        """Insert a value in the tree recursively."""
+        """Insert a recursive node into the node."""
         # Insert a recursive node if necessary.
         if value < node.value:
             # recursive.
@@ -403,7 +406,7 @@ class BinarySearchTree:
                 self._insert_recursive(node.right, value)
                 
     def inorder_traversal(self) -> List[int]:
-        """Traverses the graph in order of traversal."""
+        """Traverse the tree in order of traversal."""
         result = []
         def traverse(node):
             if node:
@@ -419,13 +422,15 @@ class ThreadSafeSingleton:
     """
     Represents a Thread safe singleton.
     
+    
+        Internal attribute(s): _instance, _lock.
     """
     _instance = None
     _lock = __import__('threading').Lock()
 
 
     def __new__(cls, *args, **kwargs):
-        """Creates a new instance of the class with the given attributes."""
+        """Create a new singleton class."""
         with cls._lock:
             if not cls._instance:
                 cls._instance = super(ThreadSafeSingleton, cls).__new__(cls)
@@ -434,7 +439,7 @@ class ThreadSafeSingleton:
 
 
 def a_star_search(grid: List[List[int]], start: tuple, end: tuple) -> Optional[List[tuple]]:
-    """Astar search algorithm for a grid of grid elements."""
+    """Perform a star search on a given grid."""
     import heapq
     rows, cols = len(grid), len(grid[0])
     
@@ -446,7 +451,7 @@ def a_star_search(grid: List[List[int]], start: tuple, end: tuple) -> Optional[L
         neighbors = []
         # compute neighbors.
         for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            # add neighbors.
+            # if there are no neighbors, add it.
             if 0 <= r + dr < rows and 0 <= c + dc < cols and grid[r+dr][c+dc] == 0:
                 neighbors.append((r+dr, c+dc))
         return neighbors
@@ -478,7 +483,7 @@ def a_star_search(grid: List[List[int]], start: tuple, end: tuple) -> Optional[L
         # current = g_score[current].
         for neighbor in get_neighbors(current):
             tentative_g_score = g_score[current] + 1
-            # If the neighbor score is less than the current g_score, then it's done.
+            # g_score = tentative_gain + heuristic.
             if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                 came_from[neighbor] = current
                 g_score[neighbor] = tentative_g_score
@@ -491,7 +496,7 @@ def a_star_search(grid: List[List[int]], start: tuple, end: tuple) -> Optional[L
 
 
 async def process_data_stream(stream, db_session):
-    """Processes items in configurable batch sizes."""
+    """Process data stream."""
     batch = []
     async for record in stream:
         batch.append(record)
@@ -509,7 +514,7 @@ async def process_data_stream(stream, db_session):
 
 
 def retry_with_backoff(retries=3, backoff_in_seconds=1):
-    """Try to retry with a backoff in seconds."""
+    """A decorator to wrap a function to retry and return the value of the function."""
     import time
     def wrapper(func):
         def inner(*args, **kwargs):
@@ -519,7 +524,7 @@ def retry_with_backoff(retries=3, backoff_in_seconds=1):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
-                    # if x == retries: raise an error.
+                    # if we have multiple retries, raise an error.
                     if x == retries:
                         raise e
                     time.sleep((backoff_in_seconds * 2 ** x))
