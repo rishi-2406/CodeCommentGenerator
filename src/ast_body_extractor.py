@@ -7,7 +7,7 @@ FunctionFeature.  The snippet is used by:
 
   1. The rule-based engine — to enrich generated comments with
      natural-language descriptions of what the body actually does.
-  2. The ML / CodeT5 path — as additional input context so the model
+  2. The AST+NLP ML path — as additional input context so the model
      can generate comments that describe the *implementation*, not
      just the name.
 """

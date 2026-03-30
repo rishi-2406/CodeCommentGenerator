@@ -1,0 +1,90 @@
+{
+  "input_file": "./out/annotated/gui_tmp_in.py",
+  "timestamp": "2026-03-30T23:54:28.899646",
+  "stages": [
+    {
+      "stage": "parse",
+      "duration_ms": 1.48,
+      "summary": {
+        "total_lines": 80,
+        "file": "./out/annotated/gui_tmp_in.py"
+      },
+      "warnings": []
+    },
+    {
+      "stage": "validate",
+      "duration_ms": 0.5,
+      "summary": {
+        "issues_found": 0
+      },
+      "warnings": []
+    },
+    {
+      "stage": "extract",
+      "duration_ms": 0.88,
+      "summary": {
+        "functions": 8,
+        "classes": 0,
+        "imports": 2
+      },
+      "warnings": []
+    },
+    {
+      "stage": "analyze",
+      "duration_ms": 1.14,
+      "summary": {
+        "function_contexts": 8,
+        "complexity_distribution": {
+          "simple": 7,
+          "moderate": 1
+        }
+      },
+      "warnings": []
+    },
+    {
+      "stage": "generate",
+      "duration_ms": 3.19,
+      "summary": {
+        "total_comments": 9,
+        "by_kind": {
+          "docstring": 8,
+          "inline": 1
+        },
+        "engine": "rule-based + ast"
+      },
+      "warnings": []
+    },
+    {
+      "stage": "attach",
+      "duration_ms": 0.08,
+      "summary": {
+        "comments_attached": 9
+      },
+      "warnings": []
+    },
+    {
+      "stage": "build_ir",
+      "duration_ms": 1.28,
+      "summary": {
+        "ir_functions": 8,
+        "total_blocks": 57
+      },
+      "warnings": []
+    },
+    {
+      "stage": "analysis",
+      "duration_ms": 1.0,
+      "summary": {
+        "findings": 51,
+        "summary": {
+          "warning": 51,
+          "P001": 51
+        }
+      },
+      "warnings": []
+    }
+  ],
+  "total_duration_ms": 10.49,
+  "comments_generated": 9,
+  "output_file": "./out/annotated/gui_annotated.py"
+}

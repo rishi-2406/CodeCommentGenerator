@@ -13,7 +13,7 @@ class TrainerWorker(QThread):
 
     def run(self):
         try:
-            self.status.emit("Starting ML training pipeline. Check Terminal Output below...")
+            self.status.emit("Starting AST+NLP training pipeline. Check Terminal Output below...")
             # Run the trainer. With verbose=True it will print to the global Terminal Output.
             result = train_and_evaluate(
                 output_dir="outputs/gui_models",
@@ -88,13 +88,13 @@ class MLTrainingWorkspace(QWidget):
         
         report_text = f"""
 ======================================
-  TRAINING COMPLETED
+  AST+NLP TRAINING COMPLETED
 ======================================
 Dataset Total Samples  : {tr.get('dataset_total', 0)}
 Training Samples (Seed): {tr.get('train_size', 0)}
 Testing Samples (Seed) : {tr.get('test_size', 0)}
 
-CodeT5 Finetuning Corpus : {tr.get('corpus_total', 0)} pairs
+AST+NLP Pair Count      : {tr.get('data_profile', {}).get('ast_nlp_pairs', tr.get('dataset_total', 0))} pairs
 
 EVALUATION METRICS
 --------------------------------------

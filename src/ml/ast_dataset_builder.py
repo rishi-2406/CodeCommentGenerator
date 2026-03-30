@@ -22,6 +22,7 @@ import ast
 import os
 import re
 import textwrap
+import warnings
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -72,7 +73,11 @@ def _extract_pairs_from_source(
       format_for_model → clean_docstring
     """
     try:
-        tree = ast.parse(source_code, filename=filepath)
+        # Third-party corpora may contain many legacy escape sequences that
+        # trigger SyntaxWarning during parsing. Keep training logs actionable.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=SyntaxWarning)
+            tree = ast.parse(source_code, filename=filepath)
     except SyntaxError:
         return []
 
@@ -158,7 +163,6 @@ def build_codesearchnet_dataset(
         ds = load_dataset(
             "code_search_net", "python",
             split=split,
-            trust_remote_code=True,
         )
     except Exception as exc:
         if verbose:
@@ -203,7 +207,9 @@ def build_codesearchnet_dataset(
             # If AST parse failed, try a minimal fallback pair using format_for_model
             # by building a minimal FunctionFeature from what we know
             try:
-                pairs.append(_fallback_pair(func_source, func_name, target))
+                fb = _fallback_pair(func_source, func_name, target)
+                if fb is not None:
+                    pairs.append(fb)
             except Exception:
                 pass
 
@@ -221,7 +227,9 @@ def _fallback_pair(
     produce a partial feature text.  Used only when full pipeline fails.
     """
     try:
-        tree = ast.parse(func_source)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=SyntaxWarning)
+            tree = ast.parse(func_source)
     except SyntaxError:
         return None
 

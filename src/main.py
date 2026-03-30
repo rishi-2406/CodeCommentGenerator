@@ -39,7 +39,7 @@ from .analysis import build_cfg, run_dfa, detect_patterns
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="code-comment-gen",
-        description="Code Comment Generation via AST and NLP — Week 9 ML/AI",
+        description="Code Comment Generation via AST with two engines: Rule-Based and AST+NLP ML",
     )
     p.add_argument("filepath", nargs="?", default=None,
                    help="Path to the Python source file to annotate")
@@ -58,9 +58,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--analysis", action="store_true",
                    help="Print the pattern-analysis report (Week 8)")
     p.add_argument("--ml", action="store_true",
-                   help="Use ML-based comment generation (Week 9)")
+                   help="Use AST+NLP ML-based comment generation")
     p.add_argument("--train", action="store_true",
                    help="Train/retrain ML models and save reports, then exit")
+    p.add_argument("--epochs", type=int, default=4,
+                   help="Training epochs for AST model (default: 4)")
+    p.add_argument("--batch-size", type=int, default=16,
+                   help="Training batch size for AST model (default: 16)")
+    p.add_argument("--lr", type=float, default=3e-4,
+                   help="Learning rate for AST model fine-tuning (default: 3e-4)")
+    p.add_argument("--codesearchnet-max", type=int, default=2000,
+                   help="Max CodeSearchNet samples for training (default: 2000)")
+    p.add_argument("--max-stdlib-files", type=int, default=200,
+                   help="Max stdlib .py files for fallback/supplement (default: 200)")
+    p.add_argument("--no-codesearchnet", action="store_true",
+                   help="Disable CodeSearchNet dataset source")
+    p.add_argument("--no-stdlib", action="store_true",
+                   help="Disable Python stdlib dataset source")
     p.add_argument("--output-dir", metavar="DIR", default="outputs",
                    help="Directory for ML model outputs (default: outputs)")
     return p
@@ -183,22 +197,29 @@ def main():
     # ── --train : train models and exit ──────────────────────────────────
     if args.train:
         print(f"\n{'='*55}")
-        print("  Week 9 — Training ML Models")
+        print("  Training AST+NLP ML Model")
         print(f"{'='*55}")
         try:
             from .ml.trainer import train_and_evaluate
             result = train_and_evaluate(
                 output_dir=output_dir,
+                include_codesearchnet=not args.no_codesearchnet,
+                include_stdlib=not args.no_stdlib,
+                codesearchnet_max=args.codesearchnet_max,
+                max_stdlib_files=args.max_stdlib_files,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                lr=args.lr,
                 verbose=True,
             )
             tr = result["training_report"]
             ev = result["eval_report"]
             print(f"\n  Dataset : {tr['dataset_total']} samples  "
                   f"(train={tr['train_size']}, test={tr['test_size']})")
-            tfidf_meta = tr.get("tfidf_model", {})
-            cv_acc = tfidf_meta.get("cv_accuracy_mean")
-            print(f"  TF-IDF CV accuracy : "
-                  f"{cv_acc:.4f}" if cv_acc is not None else "  TF-IDF CV accuracy : N/A")
+            data_profile = tr.get("data_profile", {})
+            print(f"  Training mode      : "
+                  f"{data_profile.get('input_mode', 'AST structured features')} -> "
+                  f"{data_profile.get('target_mode', 'NLP docstring sentence')}")
             summary = ev.get("summary", {})
             print(f"  Best BLEU-4        : {summary.get('best_bleu4', 0):.4f}")
             print(f"  Best ROUGE-L       : {summary.get('best_rouge_l', 0):.4f}")
@@ -218,26 +239,26 @@ def main():
     logger = PipelineLogger(input_file=filepath)
 
     print(f"\n{'='*55}")
-    print("  Code Comment Generation — AST + NLP + ML Pipeline")
+    print("  Code Comment Generation — Rule-Based + AST+NLP ML")
     print(f"{'='*55}")
     print(f"  Input : {filepath}")
 
     # ── Load ML model if requested ────────────────────────────────────────
     ast_model = None
     if args.ml:
-        print("  Mode  : ML-enhanced generation (Week 9)")
+        print("  Mode  : AST+NLP ML generation")
         try:
             from .ml.trainer import load_ast_model
             ast_model = load_ast_model(output_dir=output_dir)
             if ast_model:
                 print(f"  ML models loaded from: {output_dir}/model/")
             else:
-                print("  [warn] No fine-tuned AST model found; falling back to rule-based.")
+                print("  [warn] No fine-tuned AST model found; falling back to Rule-Based mode.")
         except Exception as exc:
             print(f"  [warn] Could not load ML models ({exc}); "
-                  "falling back to rule-based generation.")
+                  "falling back to Rule-Based generation.")
     else:
-        print("  Mode  : Rule-based generation")
+        print("  Mode  : Rule-Based generation")
 
     try:
         annotated, comments, mf, cg, attach_result, ir_module, analysis_report = \

@@ -86,7 +86,6 @@ def test_dataset_builder_offline():
 
 import sys
 
-@pytest.mark.skipif("--runslow" not in sys.argv, reason="needs --runslow")
 def test_ast_comment_model_generate():
     # Only try importing if requested, since transformers is heavy
     try:

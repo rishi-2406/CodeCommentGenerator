@@ -192,6 +192,11 @@ def train_and_evaluate(
         "dataset_total":  len(pairs),
         "train_size":     len(train_pairs),
         "test_size":      len(test_pairs),
+        "data_profile": {
+            "input_mode": "AST structured features",
+            "target_mode": "NLP docstring sentence",
+            "ast_nlp_pairs": len(pairs),
+        },
         "ast_model":      training_meta,
         "input_format":   "structured AST features (ast_feature_formatter)",
         "target_format":  "first sentence of function docstring",
@@ -204,6 +209,10 @@ def train_and_evaluate(
             "bleu4_mean":       eval_report_dict["bleu4_mean"] if eval_report_dict else 0.0,
             "rouge_l_mean":     eval_report_dict["rouge_l_mean"] if eval_report_dict else 0.0,
             "exact_match_rate": eval_report_dict["exact_match_rate"] if eval_report_dict else 0.0,
+            # Backward-compatible keys used by older CLI/GUI paths
+            "best_bleu4":       eval_report_dict["bleu4_mean"] if eval_report_dict else 0.0,
+            "best_rouge_l":     eval_report_dict["rouge_l_mean"] if eval_report_dict else 0.0,
+            "best_exact_match": eval_report_dict["exact_match_rate"] if eval_report_dict else 0.0,
             "dataset_size":     len(pairs),
         },
     }

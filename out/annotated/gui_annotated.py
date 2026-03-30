@@ -1,533 +1,122 @@
-"""
-Complex sample input for week7 pipeline testing.
-Covers: typed functions, classes with methods, nested loops,
-conditionals, recursion, decorators, and missing docstrings.
-"""
-from typing import List, Dict, Optional
-import math
+import random
+import string
 
+words = []
+for i in range(3000):
+    w = ""
+    for j in range(random.randint(3, 8)):
+        w += random.choice(string.ascii_lowercase)
+    words.append(w)
 
-
-# ---------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------
-MAX_RETRIES = 3
-DEFAULT_THRESHOLD = 0.75
-
-
-
-# ---------------------------------------------------------------
-# Utility functions (no docstrings — generator should add them)
-# ---------------------------------------------------------------
-
-
-def calculate_discount(price: float, rate: float) -> float:
-    """Calculate the discount rate for a given price."""
-    if rate < 0 or rate > 1:
-        raise ValueError("Rate must be between 0 and 1")
-    return price * (1 - rate)
-
-
-
-def find_max_element(numbers: List[float]) -> Optional[float]:
-    """Write a python function to find the maximum element in a given list of numbers."""
-    if not numbers:
-        return None
-    max_val = numbers[0]
-    for n in numbers:
-        if n > max_val:
-            max_val = n
-    return max_val
-
-
-
-def flatten_nested(nested: List) -> List:
-    """Flattens a nested list of elements."""
-    result = []
-    for item in nested:
-        if isinstance(item, list):
-            result.extend(flatten_nested(item))
-        else:
-            result.append(item)
-    return result
-
-
-
-def compute_statistics(data: List[float]) -> Dict[str, float]:
-    """Compute the statistics of a given data set."""
-    # If the data is not a dictionary, return the dictionary.
-    if not data:
-        return {}
-    n = len(data)
-    mean = sum(data) / n
-    variance = sum((x - mean) ** 2 for x in data) / n
-    std_dev = math.sqrt(variance)
-    min_val = min(data)
-    max_val = max(data)
-    return {
-        "mean": mean,
-        "variance": variance,
-        "std_dev": std_dev,
-        "min": min_val,
-        "max": max_val,
-        "count": n,
-    }
-
-
-
-def validate_email(email: str) -> bool:
-    """Validates an email address format."""
-    import re
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    return bool(re.match(pattern, email))
-
-
-
-def generate_matrix(rows: int, cols: int, default: float = 0.0) -> List[List[float]]:
-    """Generates a formatted report from the data."""
-    matrix = []
-    for i in range(rows):
-        row = []
-        for j in range(cols):
-            row.append(default)
-        matrix.append(row)
-    return matrix
-
-
-
-def search_sorted(arr: List[int], target: int) -> int:
-    """Search algorithm for a given value in an array of integers and return the index where value is the target value."""
-    low, high = 0, len(arr) - 1
-    # while low <= target.
-    while low <= high:
-        mid = (low + high) // 2
-        # Check if an array contains a target value.
-        if arr[mid] == target:
-            return mid
-        elif arr[mid] < target:
-            low = mid + 1
-        else:
-            high = mid - 1
-    return -1
-
-
-
-# ---------------------------------------------------------------
-# Class with mixed methods (some documented, some not)
-# ---------------------------------------------------------------
-
-
-class DataProcessor:
+def make_sentence():
     """
-    Represents a Data processor.
-    
-    Attributes:
-        batch_size: batch size.
-        threshold: threshold.
-    
-    Methods:
-        load_data(): Loads data.
-        process_batch(): Processes batch.
-        get_cache(): Retrieves cache.
-        set_cache(): Sets cache.
-        clear_cache(): Clears cache.
-        summarize(): Handles summarize.
+    Make a s.strip.
     """
-    
+    s = ""
+    n = random.randint(6, 14)
+    for i in range(n):
+        s += random.choice(words) + " "
+    s = s.strip()
+    return s.capitalize() + "."
 
-
-    batch_size: int = 32
-    threshold: float = DEFAULT_THRESHOLD
-
-
-    def __init__(self, name: str, batch_size: int = 32):
-        """Initialize attributes based on name and batch size."""
-        self.name = name
-        self.batch_size = batch_size
-        self._cache: Dict = {}
-
-
-    def load_data(self, filepath: str) -> List[Dict]:
-        """Load the data from a JSON file."""
-        with open(filepath, 'r') as f:
-            import json
-            return json.load(f)
-
-
-    def process_batch(self, batch: List[Dict]) -> List[Dict]:
-        """Processes items in configurable batch sizes."""
-        results = []
-        # iterate over multiple items.
-        for item in batch:
-            # Skip if the value is a value.
-            if "value" not in item:
-                continue
-            value = item["value"]
-            # the value is greater than the threshold.
-            if value > self.threshold:
-                processed = {"id": item.get("id"), "value": value, "flag": True}
-            else:
-                processed = {"id": item.get("id"), "value": value, "flag": False}
-            results.append(processed)
-        return results
-
-
-    def get_cache(self, key: str) -> Optional[Dict]:
-        """Get a cache entry."""
-        return self._cache.get(key)
-
-
-    def set_cache(self, key: str, value: Dict):
-        """Set the value of the cache entry."""
-        self._cache[key] = value
-
-
-    def clear_cache(self):
-        """Clears all cached entries."""
-        self._cache.clear()
-
-
-    def summarize(self) -> str:
-        """Generate a data processor."""
-        return f"DataProcessor(name={self.name}, batch_size={self.batch_size})"
-
-
-
-# ---------------------------------------------------------------
-# Standalone function with a docstring (generator should skip)
-# ---------------------------------------------------------------
-
-
-def format_output(value: float, precision: int = 2) -> str:
-    """Formats the output into the requested representation."""
-    return f"{value:.{precision}f}"
-
-
-
-# ---------------------------------------------------------------
-# Async function example
-# ---------------------------------------------------------------
-
-
-async def fetch_remote_data(url: str, timeout: int = 30) -> Dict:
-    """Fetch remote data from a URL."""
-    import asyncio
-    await asyncio.sleep(0)  # simulate I/O
-    return {"url": url, "status": 200}
-
-
-
-# ---------------------------------------------------------------
-# Advanced Algorithms (Testing block commenting)
-# ---------------------------------------------------------------
-
-
-def quicksort(arr: List[int]) -> List[int]:
-    """Quick sort algorithm in Python."""
-    if len(arr) <= 1:
-        return arr
-    pivot = arr[len(arr) // 2]
-    left = [x for x in arr if x < pivot]
-    middle = [x for x in arr if x == pivot]
-    right = [x for x in arr if x > pivot]
-    return quicksort(left) + middle + quicksort(right)
-
-
-
-def dfs_traverse(graph: Dict[str, List[str]], start: str, visited: set = None) -> set:
-    """Perform a depth-first search on a given graph."""
-    if visited is None:
-        visited = set()
-    visited.add(start)
-    for neighbor in graph.get(start, []):
-        if neighbor not in visited:
-            dfs_traverse(graph, neighbor, visited)
-    return visited
-
-
-
-def multiply_matrices(A: List[List[float]], B: List[List[float]]) -> List[List[float]]:
-    """Multiply matrices A and B according to matrix B."""
-    result = [[0.0 for _ in range(len(B[0]))] for _ in range(len(A))]
-    for i in range(len(A)):
-        for j in range(len(B[0])):
-            for k in range(len(B)):
-                result[i][j] += A[i][k] * B[k][j]
-    return result
-
-
-
-def custom_lru_cache(capacity: int):
-    """Decorator to be used to cache data."""
-    def decorator(func):
-        cache = {}
-        order = []
-        def wrapper(*args):
-            
-            # Cache entry.
-            if args in cache:
-                order.remove(args)
-                order.append(args)
-                return cache[args]
-            result = func(*args)
-            
-            # Clear the oldest among cache.
-            if len(cache) >= capacity:
-                oldest = order.pop(0)
-                del cache[oldest]
-            cache[args] = result
-            order.append(args)
-            return result
-        return wrapper
-    return decorator
-
-
-
-def knapsack_01(weights: List[int], values: List[int], capacity: int) -> int:
-    """Knapsack01."""
-    n = len(values)
-    dp = [[0 for _ in range(capacity + 1)] for _ in range(n + 1)]
-    # Loop over all weights.
-    for i in range(n + 1):
-        # 尚未创建对象.
-        for w in range(capacity + 1):
-            # 尚未创建对象.
-            if i == 0 or w == 0:
-                dp[i][w] = 0
-            elif weights[i-1] <= w:
-                dp[i][w] = max(values[i-1] + dp[i-1][w-weights[i-1]], dp[i-1][w])
-            else:
-                dp[i][w] = dp[i-1][w]
-    return dp[n][capacity]
-
-
-
-def dijkstra_shortest_path(graph: Dict[str, Dict[str, int]], start: str) -> Dict[str, int]:
-    """Returns a shortest path for a dijkstra-shortest node."""
-    import heapq
-    distances = {vertex: float('infinity') for vertex in graph}
-    distances[start] = 0
-    pq = [(0, start)]
-    # current_distance = 0.
-    while pq:
-        current_distance, current_vertex = heapq.heappop(pq)
-        # skip if current_distance is smaller than current vertex.
-        if current_distance > distances[current_vertex]:
-            continue
-        # update current vertex.
-        for neighbor, weight in graph[current_vertex].items():
-            distance = current_distance + weight
-            # check if neighbor is nearby.
-            if distance < distances[neighbor]:
-                distances[neighbor] = distance
-                heapq.heappush(pq, (distance, neighbor))
-    return distances
-
-
-
-def process_urls_concurrently(urls: List[str], max_workers: int = 4) -> List[Dict]:
-    """Fetch URLs concurrently."""
-    import concurrent.futures
-    import urllib.request
-    results = []
-    
-    def fetch_url(url: str):
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                return {"url": url, "status": response.status, "length": len(response.read())}
-        except Exception as e:
-            return {"url": url, "error": str(e)}
-
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_url = {executor.submit(fetch_url, url): url for url in urls}
-        # Get results.
-        # Get results.
-        for future in concurrent.futures.as_completed(future_to_url):
-            data = future.result()
-            results.append(data)
-            
-    return results
-
-
-
-# ---------------------------------------------------------------
-# Advanced Data Structures & Design Patterns
-# ---------------------------------------------------------------
-
-
-class TreeNode:
+def make_paragraph():
     """
-    Represents a Tree node.
+    Make a p.strip.
     """
-    def __init__(self, value: int):
-        """Design a class in Python to store the value of an integer."""
-        self.value = value
-        self.left = None
-        self.right = None
+    p = ""
+    for i in range(random.randint(4, 8)):
+        p += make_sentence() + " "
+    return p.strip()
 
-
-class BinarySearchTree:
+def make_block():
     """
-    Represents a Binary search tree.
+    make_block.
+    """
+    b = ""
+    for i in range(5):
+        b += make_paragraph() + "\n\n"
+    return b
+
+def transform(text):
+    """
+    transform text into a text.
     
-    Methods:
-        insert(): Inserts.
-        inorder_traversal(): Handles inorder traversal.
+    Args:
+        text: text.
     """
-    def __init__(self):
-        """Initialize the root class."""
-        self.root = None
+    t = text.upper()
+    parts = t.split()
+    random.shuffle(parts)
+    return " ".join(parts)
 
-
-    def insert(self, value: int):
-        """Insert a value into the tree."""
-        if not self.root:
-            self.root = TreeNode(value)
-        else:
-            self._insert_recursive(self.root, value)
-
-
-    def _insert_recursive(self, node: TreeNode, value: int):
-        """Insert a recursive node into the node."""
-        # Insert a recursive node if necessary.
-        if value < node.value:
-            # recursive.
-            if node.left is None:
-                node.left = TreeNode(value)
-            else:
-                self._insert_recursive(node.left, value)
-        elif value > node.value:
-            # Store the right node in recursion.
-            if node.right is None:
-                node.right = TreeNode(value)
-            else:
-                self._insert_recursive(node.right, value)
-                
-    def inorder_traversal(self) -> List[int]:
-        """Traverse the tree in order of traversal."""
-        result = []
-        def traverse(node):
-            if node:
-                traverse(node.left)
-                result.append(node.value)
-                traverse(node.right)
-        traverse(self.root)
-        return result
-
-
-
-class ThreadSafeSingleton:
+def generate_data(n):
     """
-    Represents a Thread safe singleton.
+    n returns a list of the recursors.
     
-    
-        Internal attribute(s): _instance, _lock.
+    Args:
+        n: n.
     """
-    _instance = None
-    _lock = __import__('threading').Lock()
+    raw = []
+    processed = []
+    for i in range(n):
+        p = make_paragraph()
+        raw.append(p)
+        processed.append(transform(p))
+    return raw, processed
 
-
-    def __new__(cls, *args, **kwargs):
-        """Create a new singleton class."""
-        with cls._lock:
-            if not cls._instance:
-                cls._instance = super(ThreadSafeSingleton, cls).__new__(cls)
-        return cls._instance
-
-
-
-def a_star_search(grid: List[List[int]], start: tuple, end: tuple) -> Optional[List[tuple]]:
-    """Perform a star search on a given grid."""
-    import heapq
-    rows, cols = len(grid), len(grid[0])
+# Counts words.
+# Body: 2 loop(s), 1 conditional(s).
+# Cyclomatic complexity: 4 (moderate).
+def count_words(texts):
+    """
+    Returns a number of texts.
     
-    def heuristic(a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])
-        
-    def get_neighbors(node):
-        r, c = node
-        neighbors = []
-        # compute neighbors.
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            # if there are no neighbors, add it.
-            if 0 <= r + dr < rows and 0 <= c + dc < cols and grid[r+dr][c+dc] == 0:
-                neighbors.append((r+dr, c+dc))
-        return neighbors
+    Args:
+        texts: texts.
+    """
+    freq = {}
+    for t in texts:
+        for w in t.split():
+            if w not in freq:
+                freq[w] = 0
+            freq[w] += 1
+    return freq
 
+def top_words(freq):
+    """
+    Return a list of items.sort.
+    
+    Args:
+        freq: freq.
+    """
+    items = list(freq.items())
+    items.sort(key=lambda x: -x[1])
+    return items[:20]
 
-    open_set = []
-    heapq.heappush(open_set, (0, start))
-    came_from = {}
-    g_score = {start: 0}
-    f_score = {start: heuristic(start, end)}
+def lengths(texts):
+    """
+    Returns the length of the text.
+    
+    Args:
+        texts: texts.
+    """
+    arr = []
+    for t in texts:
+        arr.append(len(t))
+    return arr
 
+raw, processed = generate_data(100)
 
-    # current = current.
-    while open_set:
-        current = heapq.heappop(open_set)[1]
+freq = count_words(processed)
+top = top_words(freq)
+lens = lengths(processed)
 
+print("Top words:")
+for w, c in top:
+    print(w, c)
 
-        # current = current.
-        if current == end:
-            path = []
-            # current = came_from.
-            while current in came_from:
-                path.append(current)
-                current = came_from[current]
-            path.append(start)
-            return path[::-1]
+print("\nLengths:")
+print(lens[:20])
 
-
-        # current = g_score[current].
-        for neighbor in get_neighbors(current):
-            tentative_g_score = g_score[current] + 1
-            # g_score = tentative_gain + heuristic.
-            if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
-                came_from[neighbor] = current
-                g_score[neighbor] = tentative_g_score
-                f_score[neighbor] = tentative_g_score + heuristic(neighbor, end)
-                # check if neighbor is in open_set.
-                if neighbor not in [i[1] for i in open_set]:
-                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
-    return None
-
-
-
-async def process_data_stream(stream, db_session):
-    """Process data stream."""
-    batch = []
-    async for record in stream:
-        batch.append(record)
-        # await db_session.execute_many(batch) == 100:.
-        if len(batch) >= 100:
-            await db_session.execute_many("INSERT INTO records VALUES (:val)", batch)
-            await db_session.commit()
-            batch.clear()
-            
-    # Persist each row into the session.
-    if batch:
-        await db_session.execute_many("INSERT INTO records VALUES (:val)", batch)
-        await db_session.commit()
-    return True
-
-
-def retry_with_backoff(retries=3, backoff_in_seconds=1):
-    """A decorator to wrap a function to retry and return the value of the function."""
-    import time
-    def wrapper(func):
-        def inner(*args, **kwargs):
-            x = 0
-            # they are not allowed to be retried.
-            while True:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    # if we have multiple retries, raise an error.
-                    if x == retries:
-                        raise e
-                    time.sleep((backoff_in_seconds * 2 ** x))
-                    x += 1
-        return inner
-    return wrapper
+print("\nSample:\n")
+print(make_block())

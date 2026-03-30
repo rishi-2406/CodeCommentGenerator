@@ -14,6 +14,7 @@ import traceback
 from src.main import run_pipeline
 from src.logger import PipelineLogger
 from src.gui.syntax_highlighter import PythonSyntaxHighlighter
+from src.ml.trainer import load_ast_model
 
 class GeneratorWorker(QThread):
     finished = pyqtSignal(str, str, object) # success/error text, annotated_code, results_dict
@@ -35,19 +36,23 @@ class GeneratorWorker(QThread):
                 
             logger = PipelineLogger(input_file=tmp_in)
             
-            model_selector = None
+            ast_model = None
             if self.is_ml:
-                self.status.emit("Loading ML Model...")
-                # We assume models are already trained in the CWD
+                self.status.emit("Loading AST+NLP ML model...")
                 try:
-                    from src.ml.trainer import load_model_selector
-                    model_selector = load_model_selector(output_dir="outputs")
+                    ast_model = load_ast_model(output_dir="outputs")
+                    if ast_model is None:
+                        self.status.emit(
+                            "Warning: No trained AST+NLP model found. Using Rule-Based mode."
+                        )
                 except Exception as e:
-                    self.status.emit(f"Warning: Could not load ML models: {e}")
+                    self.status.emit(
+                        f"Warning: Could not load AST+NLP model ({e}). Using Rule-Based mode."
+                    )
             
             self.status.emit("Running pipeline...")
             annotated, comments, mf, cg, attach_result, ir_module, analysis_report = \
-                run_pipeline(tmp_in, logger, model_selector=model_selector)
+                run_pipeline(tmp_in, logger, ast_model=ast_model)
                 
             # Optionally save file
             out_file = os.path.join(self.output_dir, "gui_annotated.py")
@@ -96,7 +101,7 @@ class GeneratorWorkspace(QWidget):
         engine_layout.setSpacing(8)
         
         self.btn_rule = QRadioButton("Rule-Based")
-        self.btn_ml = QRadioButton("ML-Based CodeT5")
+        self.btn_ml = QRadioButton("ML-Based (AST+NLP)")
         self.btn_ml.setChecked(True)
         
         self.engine_btn_group = QButtonGroup(self)
