@@ -191,6 +191,40 @@ _VERB_MAP = {
 }
 
 
+def _sanitize_docstring_content(text: str) -> str:
+    """
+    Sanitize text for safe inclusion in docstrings.
+    
+    Prevents issues like:
+    - Triple quotes appearing at line starts after wrapping
+    - Raw string prefixes (r""", u""", etc.) breaking docstring syntax
+    - Escaped characters causing parsing issues
+    
+    Args:
+        text: Raw text content to include in docstring
+        
+    Returns:
+        Sanitized text safe for docstring inclusion
+    """
+    if not text:
+        return text
+    
+    # Replace triple quotes with single quotes to prevent docstring breaks
+    text = text.replace('"""', "''")
+    text = text.replace("'''", "''")
+    
+    # Remove raw string prefixes that might appear at line starts
+    # This handles patterns like "r"""", "u"""", "f"""", "b"""", "br"""", etc.
+    text = re.sub(r'^([rubfRUBF]+)"""', r'"\1"', text, flags=re.MULTILINE)
+    text = re.sub(r'^([rubfRUBF]+)\'\'\'', r"'\1'", text, flags=re.MULTILINE)
+    
+    # Escape any remaining problematic sequences
+    # Prevent lines from starting with ''' or """
+    text = re.sub(r'^\s*("""|\'\'\')', r'', text, flags=re.MULTILINE)
+    
+    return text
+
+
 def _split_identifier(name: str) -> List[str]:
     """Split snake_case and CamelCase identifiers into lowercase tokens."""
     parts = name.split("_")
@@ -405,8 +439,12 @@ def _generate_function_docstring(
     if body_sentences:
         lines.append("")
         for sent in body_sentences:
+            # Sanitize content before wrapping to prevent docstring breaks
+            sent = _sanitize_docstring_content(sent)
             # Wrap long sentences at 80 chars within the docstring
             wrapped = textwrap.fill(sent, width=76, subsequent_indent="    ")
+            # Sanitize again after wrapping in case wrapping creates issues
+            wrapped = _sanitize_docstring_content(wrapped)
             lines.append(wrapped)
 
     # ── Args section ────────────────────────────────────────────────────────
@@ -417,7 +455,7 @@ def _generate_function_docstring(
         for p in real_params:
             ann = f" ({p.annotation})" if p.annotation else ""
             default = f", defaults to ``{p.default}``" if p.default is not None else ""
-            desc = _humanize(p.name)
+            desc = _sanitize_docstring_content(_humanize(p.name))
             lines.append(f"    {p.name}{ann}: {desc}{default}.")
 
     # ── Returns section ──────────────────────────────────────────────────────
@@ -425,6 +463,7 @@ def _generate_function_docstring(
     if ret_ann and ret_ann not in ("None", "none"):
         lines.append("")
         lines.append("Returns:")
+        ret_ann = _sanitize_docstring_content(ret_ann)
         lines.append(f"    {ret_ann}: The {noun_phrase} result.")
     elif not ret_ann and source_code:
         # Try to infer from body return expressions
@@ -433,6 +472,7 @@ def _generate_function_docstring(
         )
         if inferred and "None" not in inferred:
             ret_str = " or ".join(inferred[:3])
+            ret_str = _sanitize_docstring_content(ret_str)
             lines.append("")
             lines.append("Returns:")
             lines.append(f"    {ret_str}: The {noun_phrase} result.")
@@ -444,7 +484,16 @@ def _generate_function_docstring(
             lines.append("")
             lines.append("Raises:")
             for exc in raises[:4]:
+                exc = _sanitize_docstring_content(exc)
                 lines.append(f"    {exc}: If an error occurs during {noun_phrase}.")
+
+    # ── Security section ─────────────────────────────────────────────────────
+    if fc and getattr(fc, 'security_issues', None):
+        lines.append("")
+        lines.append("Security Warnings:")
+        for issue in fc.security_issues:
+            issue = _sanitize_docstring_content(issue)
+            lines.append(f"    - {issue}")
 
     lines.append('"""')
     return "\n".join(lines)
@@ -458,17 +507,19 @@ def _generate_class_docstring(
     tokens = _meaningful_tokens(cf.name)
     noun_phrase = " ".join(tokens).strip() or cf.name
     noun_phrase = noun_phrase[0].upper() + noun_phrase[1:] if noun_phrase else cf.name
+    noun_phrase = _sanitize_docstring_content(noun_phrase)
 
     lines = ['"""', f"Represents a {noun_phrase}."]
 
     if cf.bases and cf.bases != ["object"]:
-        lines.append(f"Inherits from: {', '.join(cf.bases)}.")
+        bases = [_sanitize_docstring_content(b) for b in cf.bases]
+        lines.append(f"Inherits from: {', '.join(bases)}.")
 
     # ── Attributes section ───────────────────────────────────────────────────
     attr_lines = _describe_class_attributes(cf)
     if attr_lines:
         lines.append("")
-        lines.extend(attr_lines)
+        lines.extend([_sanitize_docstring_content(line) for line in attr_lines])
 
     # ── Methods section ──────────────────────────────────────────────────────
     if cf.methods:
@@ -481,6 +532,7 @@ def _generate_class_docstring(
                 m_verb = _pick_verb(m_tokens)
                 m_noun = " ".join(t for t in m_tokens if t not in _VERB_MAP)
                 desc = f"{m_verb} {m_noun}." if m_noun else f"{m_verb}."
+                desc = _sanitize_docstring_content(desc)
                 lines.append(f"    {m}(): {desc}")
 
     lines.append('"""')
@@ -525,6 +577,10 @@ def _generate_inline_comment(
         raises = extract_raises(source_code, ff.lineno, ff.lineno + ff.body_lines)
         if raises:
             parts.append(f"# May raise: {', '.join(raises[:3])}.")
+
+    if getattr(fc, 'security_issues', None):
+        for issue in fc.security_issues:
+            parts.append(f"# SECURITY WARNING: {issue}")
 
     return "\n".join(parts)
 
@@ -615,6 +671,7 @@ def ml_generate_comments(
     context_graph: ContextGraph,
     ast_model=None,
     source_code: str = "",
+    strict_ml: bool = False,
 ) -> List[CommentItem]:
     """
     Generate comments using ASTCommentModel — T5 fine-tuned on structured
@@ -627,18 +684,25 @@ def ml_generate_comments(
       3. Call  ASTCommentModel.generate(ff, fc, raises)
          — the model receives ONLY structured AST feature objects,
            never raw source code or the function name alone.
-      4. Fall back to the AST rule-based engine if the model is unavailable
-         or if generation fails.
+      4. In strict ML mode, fail fast if model is unavailable or generation fails.
+         Otherwise, fall back to rule-based generation.
 
     Args:
         module_features: Output of ast_extractor.extract_features().
         context_graph:   Output of context_analyzer.analyze_context().
         ast_model:       A loaded ASTCommentModel instance (or None).
         source_code:     Raw source string — used only for raises extraction.
+        strict_ml:       If True, require ML model and fail on ML generation errors.
 
     Returns:
         List[CommentItem] sorted by line number.
     """
+    if ast_model is None and strict_ml:
+        raise RuntimeError(
+            "AST+NLP ML mode requires a trained AST model. "
+            "Run: python3 -m src.main --train"
+        )
+
     if ast_model is None:
         return generate_comments(module_features, context_graph, source_code)
 
@@ -647,21 +711,8 @@ def ml_generate_comments(
     }
     comments: List[CommentItem] = []
 
-    # --- Classes (always rule-based) ----------------------------------------
-    for cf in module_features.classes:
-        if not cf.has_docstring:
-            doc_text = _generate_class_docstring(cf, source_code)
-            comments.append(CommentItem(
-                node_id=cf.node_id,
-                node_type="class",
-                lineno=cf.lineno,
-                col_offset=cf.col_offset,
-                text=doc_text,
-                kind="docstring",
-                target_name=cf.name,
-            ))
-
-    # --- Functions — AST features → T5 model --------------------------------
+    # --- Note: Rule-based generation is strictly disabled in ML mode ---
+    # Classes are skipped since the ML model only supports Functions
     for ff in module_features.functions:
         fc = fc_map.get(ff.name)
 
@@ -677,42 +728,50 @@ def ml_generate_comments(
 
             doc_text = None
             try:
-                # ── KEY: T5 model receives AST feature OBJECTS, not source ──
+                # KEY: T5 model receives AST feature OBJECTS, not source
                 raw_text, confidence = ast_model.generate(ff, fc, raises)
+                summary = _sanitize_docstring_content(raw_text.strip().strip('"""').strip())
+                
+                # We strictly disable rule-based components like Args/Returns blocks
+                # and only append ML summary plus any Security Warnings
+                lines = ['"""', summary]
+                if fc and getattr(fc, 'security_issues', None):
+                    lines.append("")
+                    lines.append("Security Warnings:")
+                    for issue in fc.security_issues:
+                        issue = _sanitize_docstring_content(issue)
+                        lines.append(f"    - {issue}")
+                lines.append('"""')
+                doc_text = "\n".join(lines)
+            except Exception as exc:
+                if strict_ml:
+                    raise RuntimeError(
+                        f"AST+NLP generation failed for function '{ff.name}': {exc}"
+                    ) from exc
+                else:
+                    print(f"Warning: ML generation failed for '{ff.name}': {exc}")
+                    continue
 
-                # Augment the ML summary with Args:/Returns:/Raises: sections
-                # (the model produces a summary sentence; we add the structured
-                # sections from the AST extractor for completeness)
-                summary = raw_text.strip().strip('"""').strip()
-                doc_lines = build_full_docstring(summary, ff, fc, source_code, raises)
-                doc_text = doc_lines
-            except Exception:
-                pass
-
-            if not doc_text:
-                # Fallback to rule-based if model failed
-                doc_text = _generate_function_docstring(ff, fc, source_code)
-
-            comments.append(CommentItem(
-                node_id=ff.node_id,
-                node_type="function",
-                lineno=ff.lineno,
-                col_offset=ff.col_offset,
-                text=doc_text,
-                kind="docstring",
-                target_name=ff.name,
-            ))
-
-        # Inline block comment for moderate/complex functions
-        if fc and fc.complexity_label != "simple":
-            inline = _generate_inline_comment(ff, fc, source_code)
-            if inline:
+            if doc_text:
                 comments.append(CommentItem(
-                    node_id=ff.node_id + "_inline",
+                    node_id=ff.node_id,
+                    node_type="function",
+                    lineno=ff.lineno,
+                    col_offset=ff.col_offset,
+                    text=doc_text,
+                    kind="docstring",
+                    target_name=ff.name,
+                ))
+
+            # Inline block comment for security issues
+            if fc and getattr(fc, 'security_issues', None):
+                inline_parts = ["# SECURITY WARNING: " + issue for issue in fc.security_issues]
+                comments.append(CommentItem(
+                    node_id=ff.node_id + "_inline_security",
                     node_type="inline",
                     lineno=ff.lineno,
                     col_offset=ff.col_offset,
-                    text=inline,
+                    text="\n".join(inline_parts),
                     kind="inline",
                     target_name=ff.name,
                 ))
@@ -739,7 +798,9 @@ def build_full_docstring(
     noun_phrase = _humanize(ff.name)
     real_params = [p for p in ff.params if p.name not in ("self", "cls")]
 
-    lines = ['"""', summary if summary else _humanize_verb(ff.name)]
+    # Sanitize the summary from ML model
+    summary = _sanitize_docstring_content(summary if summary else _humanize_verb(ff.name))
+    lines = ['"""', summary]
 
     # Args
     if real_params:
@@ -748,13 +809,15 @@ def build_full_docstring(
         for p in real_params:
             ann     = f" ({p.annotation})" if p.annotation else ""
             default = f", defaults to ``{p.default}``" if p.default is not None else ""
-            lines.append(f"    {p.name}{ann}: {_humanize(p.name)}{default}.")
+            desc = _sanitize_docstring_content(_humanize(p.name))
+            lines.append(f"    {p.name}{ann}: {desc}{default}.")
 
     # Returns
     ret_ann = ff.return_annotation
     if ret_ann and ret_ann not in ("None", "none"):
         lines.append("")
         lines.append("Returns:")
+        ret_ann = _sanitize_docstring_content(ret_ann)
         lines.append(f"    {ret_ann}: The {noun_phrase} result.")
 
     # Raises
@@ -762,6 +825,7 @@ def build_full_docstring(
         lines.append("")
         lines.append("Raises:")
         for exc in raises[:4]:
+            exc = _sanitize_docstring_content(exc)
             lines.append(f"    {exc}: If an error occurs during {noun_phrase}.")
 
     lines.append('"""')

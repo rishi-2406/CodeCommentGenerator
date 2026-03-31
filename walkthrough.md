@@ -64,3 +64,22 @@ python3 -m src.main tests/inputs/complex_sample.py --ml
 # Targeted tests
 python3 -m pytest tests/test_ast_nlp_model.py -q
 ```
+
+## Strict ML Behavior
+
+- `--ml` now requires a trained AST+NLP model.
+- If the model is missing or cannot be loaded, the command exits with an explicit error and training hint.
+- Rule-Based generation is available only when ML mode is not selected.
+
+## Medium Quality Preset (RTX 4050)
+
+Use this as the recommended quality/speed balance:
+
+```bash
+python3 -m src.main --train \
+  --codesearchnet-max 8000 \
+  --max-stdlib-files 600 \
+  --epochs 3 \
+  --batch-size 8 \
+  --grad-accum-steps 1
+```

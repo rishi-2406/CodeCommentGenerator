@@ -39,6 +39,7 @@ import math
 import os
 import pathlib
 import random
+import re
 import textwrap
 import time
 from typing import List, Optional, Tuple
@@ -152,11 +153,12 @@ class ASTCommentModel:
     def fine_tune(
         self,
         pairs,                       # List[ASTTrainPair]
-        epochs: int = 4,
-        batch_size: int = 16,
-        lr: float = 3e-4,
+        epochs: int = 3,
+        batch_size: int = 8,
+        lr: float = 2e-4,
         warmup_ratio: float = 0.1,
         val_split: float = 0.1,
+        grad_accum_steps: int = 1,
         seed: int = 42,
         verbose: bool = True,
     ) -> dict:
@@ -170,6 +172,7 @@ class ASTCommentModel:
             lr:          Peak learning rate.
             warmup_ratio:Fraction of steps for LR warm-up.
             val_split:   Fraction withheld for validation loss reporting.
+            grad_accum_steps: Number of gradient accumulation steps.
             seed:        Random seed.
             verbose:     Print per-epoch loss.
 
@@ -195,7 +198,8 @@ class ASTCommentModel:
                                 num_workers=2, pin_memory=(self._device == "cuda"))
 
         optimizer     = AdamW(self._model.parameters(), lr=lr, weight_decay=0.01)
-        total_steps   = len(train_dl) * epochs
+        grad_accum_steps = max(1, int(grad_accum_steps))
+        total_steps   = max(1, (len(train_dl) * epochs) // grad_accum_steps)
         warmup_steps  = int(total_steps * warmup_ratio)
         scheduler     = get_linear_schedule_with_warmup(
             optimizer, num_warmup_steps=warmup_steps,
@@ -212,15 +216,18 @@ class ASTCommentModel:
         for epoch in range(epochs):
             t0 = time.time()
             epoch_loss = 0.0
-            for batch in train_dl:
+            optimizer.zero_grad()
+            for step_idx, batch in enumerate(train_dl, start=1):
                 batch = {k: v.to(self._device) for k, v in batch.items()}
-                optimizer.zero_grad()
-                loss = self._model(**batch).loss
+                loss = self._model(**batch).loss / grad_accum_steps
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self._model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
-                epoch_loss += loss.item()
+                epoch_loss += loss.item() * grad_accum_steps
+
+                if step_idx % grad_accum_steps == 0 or step_idx == len(train_dl):
+                    torch.nn.utils.clip_grad_norm_(self._model.parameters(), 1.0)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
             avg = epoch_loss / max(len(train_dl), 1)
             self._loss_history.append(avg)
@@ -250,6 +257,7 @@ class ASTCommentModel:
             "train_size": len(train_data),
             "val_size":   len(val_data),
             "epochs":     epochs,
+            "grad_accum_steps": grad_accum_steps,
             "final_loss": round(self._loss_history[-1], 4) if self._loss_history else None,
             "loss_history": [round(l, 4) for l in self._loss_history],
             "device": self._device,
@@ -262,8 +270,9 @@ class ASTCommentModel:
         ff,
         fc=None,
         raises: Optional[List[str]] = None,
-        num_beams: int = 4,
-        max_length: int = 64,
+        num_beams: int = 6,
+        max_length: int = 72,
+        min_length: int = 8,
     ) -> Tuple[str, float]:
         """
         Generate a docstring from AST feature objects.
@@ -274,6 +283,7 @@ class ASTCommentModel:
             raises:    List of exception names raised in the body.
             num_beams: Beam search width.
             max_length:Max output tokens.
+            min_length:Minimum output tokens.
 
         Returns:
             (docstring_text, confidence_score)
@@ -297,15 +307,18 @@ class ASTCommentModel:
                 **enc,
                 num_beams=num_beams,
                 max_length=max_length,
+                min_length=min_length,
                 early_stopping=True,
-                no_repeat_ngram_size=2,
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.15,
+                length_penalty=0.9,
                 output_scores=True,
                 return_dict_in_generate=True,
             )
 
-        text = self._tokenizer.decode(
-            out.sequences[0], skip_special_tokens=True
-        ).strip()
+        text = self._postprocess_generated_text(
+            self._tokenizer.decode(out.sequences[0], skip_special_tokens=True).strip()
+        )
 
         # Confidence from beam score
         if hasattr(out, "sequences_scores") and out.sequences_scores is not None:
@@ -320,7 +333,7 @@ class ASTCommentModel:
         return text, confidence
 
     def generate_from_feature_text(
-        self, feature_text: str, num_beams: int = 4, max_length: int = 64
+        self, feature_text: str, num_beams: int = 6, max_length: int = 72, min_length: int = 8
     ) -> Tuple[str, float]:
         """
         Lower-level generate: accepts already-formatted AST feature text.
@@ -342,15 +355,18 @@ class ASTCommentModel:
                 **enc,
                 num_beams=num_beams,
                 max_length=max_length,
+                min_length=min_length,
                 early_stopping=True,
-                no_repeat_ngram_size=2,
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.15,
+                length_penalty=0.9,
                 output_scores=True,
                 return_dict_in_generate=True,
             )
 
-        text = self._tokenizer.decode(
-            out.sequences[0], skip_special_tokens=True
-        ).strip()
+        text = self._postprocess_generated_text(
+            self._tokenizer.decode(out.sequences[0], skip_special_tokens=True).strip()
+        )
 
         if hasattr(out, "sequences_scores") and out.sequences_scores is not None:
             confidence = float(min(1.0, math.exp(float(out.sequences_scores[0]))))
@@ -361,6 +377,16 @@ class ASTCommentModel:
             text = f'"""{text}"""'
 
         return text, confidence
+
+    def _postprocess_generated_text(self, text: str) -> str:
+        """Light cleanup to keep generated summaries concise and readable."""
+        cleaned = re.sub(r"\s+", " ", text).strip()
+        cleaned = cleaned.strip('"').strip("'").strip()
+        # Remove repeated adjacent bigrams like "returns returns ..."
+        cleaned = re.sub(r"\b(\w+)\s+\1\b", r"\1", cleaned, flags=re.I)
+        if cleaned and cleaned[-1] not in ".!?":
+            cleaned += "."
+        return cleaned
 
     def training_report(self) -> dict:
         return {

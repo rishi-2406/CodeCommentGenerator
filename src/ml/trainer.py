@@ -82,12 +82,13 @@ def train_and_evaluate(
     output_dir: str = "outputs",
     include_codesearchnet: bool = True,
     include_stdlib: bool = True,
-    codesearchnet_max: int = 30_000,
-    max_stdlib_files: int = 500,
+    codesearchnet_max: int = 20_000,
+    max_stdlib_files: int = 1500,
     test_ratio: float = 0.1,
     epochs: int = 4,
-    batch_size: int = 16,
-    lr: float = 3e-4,
+    batch_size: int = 8,
+    grad_accum_steps: int = 1,
+    lr: float = 2e-4,
     verbose: bool = True,
 ) -> dict:
     """
@@ -106,6 +107,7 @@ def train_and_evaluate(
         test_ratio:            Holdout fraction for evaluation.
         epochs:                Fine-tuning epochs.
         batch_size:            Mini-batch size (reduce to 4 if OOM).
+        grad_accum_steps:      Gradient accumulation steps.
         lr:                    Learning rate.
         verbose:               Print progress.
 
@@ -160,6 +162,7 @@ def train_and_evaluate(
             train_pairs,
             epochs=epochs,
             batch_size=batch_size,
+            grad_accum_steps=grad_accum_steps,
             lr=lr,
             verbose=verbose,
         )
@@ -198,6 +201,15 @@ def train_and_evaluate(
             "ast_nlp_pairs": len(pairs),
         },
         "ast_model":      training_meta,
+        "training_profile": {
+            "quality_preset": "medium",
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "grad_accum_steps": grad_accum_steps,
+            "learning_rate": lr,
+            "codesearchnet_max": codesearchnet_max,
+            "max_stdlib_files": max_stdlib_files,
+        },
         "input_format":   "structured AST features (ast_feature_formatter)",
         "target_format":  "first sentence of function docstring",
         "source":         ["CodeSearchNet Python (HF)", "Python stdlib"],

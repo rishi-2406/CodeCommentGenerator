@@ -23,6 +23,10 @@ import sys
 import os
 import json
 import argparse
+import warnings
+
+# Suppress SyntaxWarnings from ast.parse when evaluating legacy CodeSearchNet/Stdlib files
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 from .parser_module import read_file, parse_code
 from .validator import validate_ast
@@ -63,14 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Train/retrain ML models and save reports, then exit")
     p.add_argument("--epochs", type=int, default=4,
                    help="Training epochs for AST model (default: 4)")
-    p.add_argument("--batch-size", type=int, default=16,
-                   help="Training batch size for AST model (default: 16)")
-    p.add_argument("--lr", type=float, default=3e-4,
-                   help="Learning rate for AST model fine-tuning (default: 3e-4)")
-    p.add_argument("--codesearchnet-max", type=int, default=2000,
-                   help="Max CodeSearchNet samples for training (default: 2000)")
-    p.add_argument("--max-stdlib-files", type=int, default=200,
-                   help="Max stdlib .py files for fallback/supplement (default: 200)")
+    p.add_argument("--batch-size", type=int, default=8,
+                   help="Training batch size for AST model (default: 8)")
+    p.add_argument("--grad-accum-steps", type=int, default=1,
+                   help="Gradient accumulation steps (default: 1)")
+    p.add_argument("--lr", type=float, default=2e-4,
+                   help="Learning rate for AST model fine-tuning (default: 2e-4)")
+    p.add_argument("--codesearchnet-max", type=int, default=20000,
+                   help="Max CodeSearchNet samples for training (default: 20000)")
+    p.add_argument("--max-stdlib-files", type=int, default=1500,
+                   help="Max stdlib .py files for fallback/supplement (default: 1500)")
     p.add_argument("--no-codesearchnet", action="store_true",
                    help="Disable CodeSearchNet dataset source")
     p.add_argument("--no-stdlib", action="store_true",
@@ -80,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None):
+def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_ml: bool = False):
     """
     Execute the full pipeline (Week 7–8 stages + Week 9 ML generation).
 
@@ -88,6 +94,7 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None):
         filepath:       Path to Python source file.
         logger:         PipelineLogger instance.
         ast_model:      Optional ASTCommentModel for ML-based generation.
+        strict_ml:      Require AST+NLP ML path when True (no rule fallback).
 
     Returns:
         (annotated_source, comments, module_features, context_graph,
@@ -138,12 +145,13 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None):
         comments = ml_generate_comments(
             module_features, context_graph, ast_model,
             source_code=source_code,
+            strict_ml=strict_ml,
         )
-        gen_engine = "ml"
+        gen_engine = "ast+nlp_ml"
     else:
         comments = generate_comments(module_features, context_graph,
                                      source_code=source_code)
-        gen_engine = "rule-based + ast"
+        gen_engine = "rule_based"
     counts = {"docstring": 0, "inline": 0}
     for c in comments:
         counts[c.kind] = counts.get(c.kind, 0) + 1
@@ -209,6 +217,7 @@ def main():
                 max_stdlib_files=args.max_stdlib_files,
                 epochs=args.epochs,
                 batch_size=args.batch_size,
+                grad_accum_steps=args.grad_accum_steps,
                 lr=args.lr,
                 verbose=True,
             )
@@ -253,16 +262,19 @@ def main():
             if ast_model:
                 print(f"  ML models loaded from: {output_dir}/model/")
             else:
-                print("  [warn] No fine-tuned AST model found; falling back to Rule-Based mode.")
+                print("  [error] No trained AST+NLP model found.")
+                print("          Train first: python3 -m src.main --train")
+                sys.exit(2)
         except Exception as exc:
-            print(f"  [warn] Could not load ML models ({exc}); "
-                  "falling back to Rule-Based generation.")
+            print(f"  [error] Could not load AST+NLP model: {exc}")
+            print("          Train first: python3 -m src.main --train")
+            sys.exit(2)
     else:
         print("  Mode  : Rule-Based generation")
 
     try:
         annotated, comments, mf, cg, attach_result, ir_module, analysis_report = \
-            run_pipeline(filepath, logger, ast_model=ast_model)
+            run_pipeline(filepath, logger, ast_model=ast_model, strict_ml=args.ml)
     except ParserError as e:
         print(f"\n{format_error(e)}")
         sys.exit(1)

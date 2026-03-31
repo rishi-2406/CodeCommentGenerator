@@ -42,17 +42,16 @@ class GeneratorWorker(QThread):
                 try:
                     ast_model = load_ast_model(output_dir="outputs")
                     if ast_model is None:
-                        self.status.emit(
-                            "Warning: No trained AST+NLP model found. Using Rule-Based mode."
+                        raise RuntimeError(
+                            "No trained AST+NLP model found. "
+                            "Train first from ML Training tab or run: python3 -m src.main --train"
                         )
                 except Exception as e:
-                    self.status.emit(
-                        f"Warning: Could not load AST+NLP model ({e}). Using Rule-Based mode."
-                    )
+                    raise RuntimeError(f"Failed to start ML mode: {e}") from e
             
             self.status.emit("Running pipeline...")
             annotated, comments, mf, cg, attach_result, ir_module, analysis_report = \
-                run_pipeline(tmp_in, logger, ast_model=ast_model)
+                run_pipeline(tmp_in, logger, ast_model=ast_model, strict_ml=self.is_ml)
                 
             # Optionally save file
             out_file = os.path.join(self.output_dir, "gui_annotated.py")

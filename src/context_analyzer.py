@@ -37,6 +37,7 @@ class FunctionContext:
     calls_external: List[str] = field(default_factory=list)   # calls to module functions
     calls_internal: List[str] = field(default_factory=list)   # calls to other module functions
     complexity_label: str = "simple"   # simple / moderate / complex / very_complex
+    security_issues: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -242,6 +243,24 @@ def analyze_context(
         internal_calls = [c for c in ff.calls_made if c.split('.')[0] in module_func_names and c != ff.name]
         external_calls = [c for c in ff.calls_made if c.split('.')[0] not in module_func_names]
 
+        # Basic Security Analysis
+        security_issues = []
+        for call in ff.calls_made:
+            if call in ("eval", "exec", "compile"):
+                security_issues.append(f"Uses dangerous builtin '{call}'")
+            elif "subprocess" in call and "shell=True" in source_code[ff.lineno-1:ff.lineno+ff.body_lines]:
+                # Heuristic: If subprocess is called and shell=True appears in body
+                security_issues.append("Potential shell injection risk (subprocess with shell=True)")
+            elif "md5" in call or "sha1" in call:
+                security_issues.append(f"Uses weak cryptographic hash function '{call}'")
+
+        # Basic heuristic for hardcoded passwords (very simple check on variable assignments)
+        for v in variables:
+            low_name = v.name.lower()
+            if "password" in low_name or "secret" in low_name or "token" in low_name:
+                if v.inferred_type == "str":
+                    security_issues.append(f"Potential hardcoded secret assigned to '{v.name}'")
+
         fc = FunctionContext(
             node_id=ff.node_id,
             name=ff.name,
@@ -250,6 +269,7 @@ def analyze_context(
             calls_internal=internal_calls,
             calls_external=external_calls,
             complexity_label=_complexity_label(cc),
+            security_issues=security_issues,
         )
         cg.function_contexts.append(fc)
         cg.call_graph[ff.name] = ff.calls_made

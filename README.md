@@ -47,7 +47,18 @@ python3 -m src.main tests/inputs/complex_sample.py
 python3 -m src.main tests/inputs/complex_sample.py --ml
 ```
 
-If no trained model exists, `--ml` automatically falls back to Rule-Based mode.
+`--ml` is strict AST+NLP mode. If no trained model exists, execution fails with a clear train-first message.
+
+Recommended medium-quality run for RTX 4050:
+
+```bash
+python3 -m src.main --train \
+  --codesearchnet-max 8000 \
+  --max-stdlib-files 600 \
+  --epochs 3 \
+  --batch-size 8 \
+  --grad-accum-steps 1
+```
 
 ## Output Artifacts
 
@@ -64,3 +75,12 @@ After training, artifacts are written in `outputs/`:
 - `data_profile.input_mode = "AST structured features"`
 - `data_profile.target_mode = "NLP docstring sentence"`
 - `data_profile.ast_nlp_pairs`
+
+## Docstring Quality & Safety
+
+Both generation engines apply automatic docstring sanitization to ensure generated code is syntactically valid:
+
+- **Triple-quote escaping**: Prevents malformed docstrings when generated text contains quote characters
+- **Raw string sanitization**: Removes invalid raw string prefixes (r""", u""", etc.) that could break syntax
+- **Content validation**: All dynamic content (parameters, types, exceptions) is validated before insertion
+- This guarantees output Python files are always compilable and valid
