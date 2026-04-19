@@ -7,29 +7,29 @@ from PyQt6.QtGui import (
 
 
 _NODE_COLORS = {
-    "Module": QColor("#64748b"),
-    "Import": QColor("#eab308"),
-    "Class": QColor("#22c55e"),
-    "Function": QColor("#3b82f6"),
-    "AsyncFunction": QColor("#8b5cf6"),
-    "Param": QColor("#06b6d4"),
-    "Loop": QColor("#f97316"),
-    "Conditional": QColor("#f97316"),
-    "Call": QColor("#a855f7"),
-    "Return": QColor("#ef4444"),
-    "Decorator": QColor("#ec4899"),
+    "Module": QColor("#6b7280"),
+    "Import": QColor("#ca8a04"),
+    "Class": QColor("#16a34a"),
+    "Function": QColor("#2563eb"),
+    "AsyncFunction": QColor("#7c3aed"),
+    "Param": QColor("#0891b2"),
+    "Loop": QColor("#ea580c"),
+    "Conditional": QColor("#ea580c"),
+    "Call": QColor("#7c3aed"),
+    "Return": QColor("#dc2626"),
+    "Decorator": QColor("#db2777"),
 }
 
 _EDGE_COLORS = {
-    "parent": QColor("#475569"),
-    "call": QColor("#a855f7"),
+    "parent": QColor("#9ca3af"),
+    "call": QColor("#7c3aed"),
 }
 
 _COMPLEXITY_COLORS = {
-    "simple": QColor("#22c55e"),
-    "moderate": QColor("#eab308"),
-    "complex": QColor("#f97316"),
-    "very_complex": QColor("#ef4444"),
+    "simple": QColor("#16a34a"),
+    "moderate": QColor("#ca8a04"),
+    "complex": QColor("#ea580c"),
+    "very_complex": QColor("#dc2626"),
 }
 
 
@@ -164,12 +164,12 @@ class AstGraphWidget(QWidget):
 
     def _draw_nodes(self, painter):
         for node in self._all_nodes:
-            color = _NODE_COLORS.get(node.node_type, QColor("#64748b"))
+            color = _NODE_COLORS.get(node.node_type, QColor("#6b7280"))
             is_hovered = node is self._hovered
             rect = QRectF(node.x - node.w / 2, node.y - node.h / 2, node.w, node.h)
 
             if is_hovered:
-                painter.setPen(QPen(QColor("#ffffff"), 2.5))
+                painter.setPen(QPen(QColor("#1a1a2e"), 2.5))
             else:
                 painter.setPen(QPen(color.darker(120), 1.5))
 

@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QTextEdit, QLabel,
-    QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView
+    QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView,
+    QStackedWidget
 )
 from PyQt6.QtGui import QColor, QBrush, QFont
 from PyQt6.QtCore import Qt
@@ -8,12 +9,25 @@ from src.gui.syntax_highlighter import PythonSyntaxHighlighter
 from src.gui.ast_graph_widget import AstGraphWidget
 from src.gui.context_graph_widget import ContextGraphWidget
 from src.gui.eval_graph_widget import EvalGraphWidget
-from src.gui.security_graph_widget import SecurityGraphWidget
+
+_EMPTY_STATE_STYLE = (
+    "color: #9ca3af; font-size: 14px; padding: 40px; "
+    "background: transparent; border: none;"
+)
+
+
+def _make_empty_state(message):
+    lbl = QLabel(message)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl.setStyleSheet(_EMPTY_STATE_STYLE)
+    lbl.setWordWrap(True)
+    return lbl
 
 
 class InsightsWorkspace(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._populated = False
         self.setup_ui()
 
     def setup_ui(self):
@@ -21,98 +35,100 @@ class InsightsWorkspace(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
 
         title = QLabel("Insights & Code Visualizer")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 12px; color: #e2e8f0;")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 12px; color: #1a1a2e;")
         layout.addWidget(title)
 
         self.tabs = QTabWidget()
 
-        # 1. AST Features (Tree)
         self.tree_ast = QTreeWidget()
         self.tree_ast.setHeaderLabels(["AST Node", "Details"])
         self.tree_ast.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree_ast.setStyleSheet("QTreeWidget { background: #1e293b; color: #f8fafc; border: none; font-size: 13px; } QHeaderView::section { background: #0f172a; color: #94a3b8; padding: 4px; border: 1px solid #334155; }")
-        self.tabs.addTab(self.tree_ast, "AST Features")
+        self._empty_ast = _make_empty_state(
+            "Run code generation to populate AST features.\n\n"
+            "The AST tree will show functions, classes, parameters, and complexity metrics."
+        )
+        self._stack_ast = QStackedWidget()
+        self._stack_ast.addWidget(self._empty_ast)
+        self._stack_ast.addWidget(self.tree_ast)
+        self.tabs.addTab(self._stack_ast, "AST Features")
 
-        # 2. AST Graph
         self.ast_graph = AstGraphWidget()
-        self.ast_graph.setStyleSheet("background-color: #0f172a;")
-        self.tabs.addTab(self.ast_graph, "AST Graph")
+        self.ast_graph.setStyleSheet("background-color: #ffffff;")
+        self._empty_ast_graph = _make_empty_state(
+            "Run code generation to visualize the AST graph.\n\n"
+            "An interactive tree graph will display nodes and their relationships."
+        )
+        self._stack_ast_graph = QStackedWidget()
+        self._stack_ast_graph.addWidget(self._empty_ast_graph)
+        self._stack_ast_graph.addWidget(self.ast_graph)
+        self.tabs.addTab(self._stack_ast_graph, "AST Graph")
 
-        # 3. Context Graph (Tree)
         self.tree_ctx = QTreeWidget()
         self.tree_ctx.setHeaderLabels(["Function", "Context Data"])
         self.tree_ctx.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree_ctx.setStyleSheet("QTreeWidget { background: #1e293b; color: #f8fafc; border: none; font-size: 13px; } QHeaderView::section { background: #0f172a; color: #94a3b8; padding: 4px; border: 1px solid #334155; }")
-        self.tabs.addTab(self.tree_ctx, "Context Graph")
+        self._empty_ctx = _make_empty_state(
+            "Run code generation to see context graph data.\n\n"
+            "Function complexity, internal/external calls, and security warnings will appear here."
+        )
+        self._stack_ctx = QStackedWidget()
+        self._stack_ctx.addWidget(self._empty_ctx)
+        self._stack_ctx.addWidget(self.tree_ctx)
+        self.tabs.addTab(self._stack_ctx, "Context Graph")
 
-        # 4. Call Graph (Visual)
         self.call_graph = ContextGraphWidget()
-        self.call_graph.setStyleSheet("background-color: #0f172a;")
-        self.tabs.addTab(self.call_graph, "Call Graph")
+        self.call_graph.setStyleSheet("background-color: #ffffff;")
+        self._empty_call = _make_empty_state(
+            "Run code generation to visualize the call graph.\n\n"
+            "An interactive force-directed graph will display function call relationships."
+        )
+        self._stack_call = QStackedWidget()
+        self._stack_call.addWidget(self._empty_call)
+        self._stack_call.addWidget(self.call_graph)
+        self.tabs.addTab(self._stack_call, "Call Graph")
 
-        # 5. IR Dump (Text Editor with Syntax Highlighting)
         self.tab_ir = QTextEdit()
         self.tab_ir.setProperty("class", "CodeEditor")
         self.tab_ir.setReadOnly(True)
-        self.tab_ir.setStyleSheet("QTextEdit { background: #1e293b; color: #f8fafc; font-family: monospace; font-size: 13px; border: none; }")
-        self.hl_ir = PythonSyntaxHighlighter(self.tab_ir.document())
-        self.tabs.addTab(self.tab_ir, "IR Dump")
+        self._empty_ir = _make_empty_state(
+            "Run code generation to view the Intermediate Representation.\n\n"
+            "The IR dump shows the internal representation used by the comment generator."
+        )
+        self._stack_ir = QStackedWidget()
+        self._stack_ir.addWidget(self._empty_ir)
+        self._stack_ir.addWidget(self.tab_ir)
+        self.tabs.addTab(self._stack_ir, "IR Dump")
 
-        # 6. Analysis Report (Table)
         self.table_analysis = QTableWidget()
         self.table_analysis.setColumnCount(4)
         self.table_analysis.setHorizontalHeaderLabels(["Severity", "Pattern", "Function", "Message"])
         self.table_analysis.horizontalHeader().setStretchLastSection(True)
         self.table_analysis.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_analysis.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_analysis.setStyleSheet("""
-            QTableWidget { background: #1e293b; color: #f8fafc; gridline-color: #334155; border: none; font-size: 13px; }
-            QHeaderView::section { background: #0f172a; color: #94a3b8; padding: 4px; border: 1px solid #334155; }
-            QTableWidget::item:selected { background: #3b82f6; }
-        """)
-        self.tabs.addTab(self.table_analysis, "Analysis Report")
+        self._empty_analysis = _make_empty_state(
+            "Run code generation to see the analysis report.\n\n"
+            "Pattern findings with severity, function, and message details will appear here."
+        )
+        self._stack_analysis = QStackedWidget()
+        self._stack_analysis.addWidget(self._empty_analysis)
+        self._stack_analysis.addWidget(self.table_analysis)
+        self.tabs.addTab(self._stack_analysis, "Analysis Report")
 
-        # 7. Evaluation Charts
         self.eval_graph = EvalGraphWidget()
         self.tabs.addTab(self.eval_graph, "Evaluation")
 
-        # 8. Security Charts
-        self.security_graph = SecurityGraphWidget()
-        self.tabs.addTab(self.security_graph, "Security")
-
         layout.addWidget(self.tabs)
 
-        self.tabs.setStyleSheet("""
-            QTabBar::tab {
-                background: #1e293b;
-                color: #94a3b8;
-                padding: 8px 16px;
-                border: 1px solid #0f172a;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                font-weight: bold;
-            }
-            QTabBar::tab:selected {
-                background: #3b82f6;
-                color: white;
-            }
-            QTabWidget::pane {
-                border: 1px solid #0f172a;
-                background: #1e293b;
-                border-radius: 4px;
-            }
-        """)
-
     def populate_insights(self, pipeline_results):
+        self._populated = True
         mf = pipeline_results.get("mf")
         cg = pipeline_results.get("cg")
         ir_module = pipeline_results.get("ir")
         analysis_report = pipeline_results.get("analysis")
-        security_report = pipeline_results.get("security_report")
 
-        # Populate AST
         self.tree_ast.clear()
         if mf:
+            self._stack_ast.setCurrentIndex(1)
+            self._stack_ast_graph.setCurrentIndex(1)
             root_funcs = QTreeWidgetItem(self.tree_ast, ["Functions", f"{len(mf.functions)} found"])
             for func in mf.functions:
                 f_item = QTreeWidgetItem(root_funcs, [func.name, f"Line {func.lineno}"])
@@ -138,18 +154,19 @@ class InsightsWorkspace(QWidget):
 
             self.ast_graph.set_data(mf)
 
-        # Populate Context
         self.tree_ctx.clear()
         if cg:
+            self._stack_ctx.setCurrentIndex(1)
+            self._stack_call.setCurrentIndex(1)
             for fc in cg.function_contexts:
                 item = QTreeWidgetItem(self.tree_ctx, [fc.name, fc.complexity_label])
 
                 if fc.complexity_label == "simple":
-                    item.setForeground(1, QBrush(QColor("#22c55e")))
+                    item.setForeground(1, QBrush(QColor("#16a34a")))
                 elif fc.complexity_label == "moderate":
-                    item.setForeground(1, QBrush(QColor("#eab308")))
+                    item.setForeground(1, QBrush(QColor("#ca8a04")))
                 elif fc.complexity_label in ("complex", "very_complex"):
-                    item.setForeground(1, QBrush(QColor("#ef4444")))
+                    item.setForeground(1, QBrush(QColor("#dc2626")))
 
                 if fc.calls_internal:
                     QTreeWidgetItem(item, ["Internal Calls", ", ".join(fc.calls_internal)])
@@ -159,31 +176,31 @@ class InsightsWorkspace(QWidget):
                 security_issues = getattr(fc, 'security_issues', [])
                 if security_issues:
                     sec_item = QTreeWidgetItem(item, ["Security Warnings", f"{len(security_issues)} found"])
-                    sec_item.setForeground(0, QBrush(QColor("#ef4444")))
+                    sec_item.setForeground(0, QBrush(QColor("#dc2626")))
                     for sec in security_issues:
                         s_i = QTreeWidgetItem(sec_item, ["Warning", sec])
-                        s_i.setForeground(1, QBrush(QColor("#ef4444")))
+                        s_i.setForeground(1, QBrush(QColor("#dc2626")))
             self.tree_ctx.expandAll()
 
             self.call_graph.set_data(cg)
 
-        # Populate IR Dump
         if ir_module:
+            self._stack_ir.setCurrentIndex(1)
             from src.ir import pretty_print_ir
             self.tab_ir.setPlainText(pretty_print_ir(ir_module))
 
-        # Populate Analysis Report
         self.table_analysis.setRowCount(0)
         if analysis_report and analysis_report.findings:
+            self._stack_analysis.setCurrentIndex(1)
             self.table_analysis.setRowCount(len(analysis_report.findings))
             for i, finding in enumerate(analysis_report.findings):
                 sev_item = QTableWidgetItem(finding.severity.upper())
                 if finding.severity == "warning":
-                    sev_item.setForeground(QBrush(QColor("#eab308")))
+                    sev_item.setForeground(QBrush(QColor("#ca8a04")))
                 elif finding.severity == "error":
-                    sev_item.setForeground(QBrush(QColor("#ef4444")))
+                    sev_item.setForeground(QBrush(QColor("#dc2626")))
                 else:
-                    sev_item.setForeground(QBrush(QColor("#3b82f6")))
+                    sev_item.setForeground(QBrush(QColor("#2563eb")))
 
                 self.table_analysis.setItem(i, 0, sev_item)
                 self.table_analysis.setItem(i, 1, QTableWidgetItem(finding.pattern_id))
@@ -192,11 +209,7 @@ class InsightsWorkspace(QWidget):
         self.table_analysis.resizeColumnsToContents()
         self.table_analysis.horizontalHeader().setStretchLastSection(True)
 
-        # Populate Evaluation Charts
         import json, os
         eval_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs", "eval_report.json")
         train_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "outputs", "training_report.json")
         self.eval_graph.set_data(eval_json_path=eval_path, training_json_path=train_path)
-
-        # Populate Security Charts
-        self.security_graph.set_data(security_report=security_report)

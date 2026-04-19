@@ -8,9 +8,8 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
 
         self.highlightingRules = []
 
-        # Keywords
         keywordFormat = QTextCharFormat()
-        keywordFormat.setForeground(QColor("#c678dd")) # Purple
+        keywordFormat.setForeground(QColor("#7c3aed"))
         keywordFormat.setFontWeight(QFont.Weight.Bold)
         keywords = [
             '\\bdef\\b', '\\bclass\\b', '\\bimport\\b', '\\bfrom\\b',
@@ -25,9 +24,8 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         for pattern in keywords:
             self.highlightingRules.append((re.compile(pattern), keywordFormat))
 
-        # Builtins
         builtinFormat = QTextCharFormat()
-        builtinFormat.setForeground(QColor("#56b6c2")) # Cyan
+        builtinFormat.setForeground(QColor("#0d9488"))
         builtins = [
             '\\bprint\\b', '\\blen\\b', '\\brange\\b', '\\bstr\\b',
             '\\bint\\b', '\\bfloat\\b', '\\bdict\\b', '\\bset\\b', '\\btype\\b',
@@ -36,36 +34,30 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         for pattern in builtins:
             self.highlightingRules.append((re.compile(pattern), builtinFormat))
 
-        # Decorators
         decoratorFormat = QTextCharFormat()
-        decoratorFormat.setForeground(QColor("#61afef")) # Blue
+        decoratorFormat.setForeground(QColor("#2563eb"))
         self.highlightingRules.append((re.compile(r'@[^\n]*'), decoratorFormat))
 
-        # Strings (single line)
         stringFormat = QTextCharFormat()
-        stringFormat.setForeground(QColor("#98c379")) # Green
+        stringFormat.setForeground(QColor("#16a34a"))
         self.highlightingRules.append((re.compile(r'".*"'), stringFormat))
         self.highlightingRules.append((re.compile(r"'.*'"), stringFormat))
 
-        # Functions
         functionFormat = QTextCharFormat()
-        functionFormat.setForeground(QColor("#61afef")) # Blue
+        functionFormat.setForeground(QColor("#2563eb"))
         self.highlightingRules.append((re.compile(r'\b[A-Za-z0-9_]+(?=\()'), functionFormat))
 
-        # Numbers
         numberFormat = QTextCharFormat()
-        numberFormat.setForeground(QColor("#d19a66")) # Orange
+        numberFormat.setForeground(QColor("#ea580c"))
         self.highlightingRules.append((re.compile(r'\b[0-9]+(\.[0-9]+)?\b'), numberFormat))
 
-        # Single Line Comments
         self.commentFormat = QTextCharFormat()
-        self.commentFormat.setForeground(QColor("#7f848e")) # Gray
+        self.commentFormat.setForeground(QColor("#9ca3af"))
         self.commentFormat.setFontItalic(True)
         self.highlightingRules.append((re.compile(r'#[^\n]*'), self.commentFormat))
 
-        # Multiline strings/comments
         self.multiLineStringFormat = QTextCharFormat()
-        self.multiLineStringFormat.setForeground(QColor("#98c379"))
+        self.multiLineStringFormat.setForeground(QColor("#16a34a"))
         self.multiLineStringFormat.setFontItalic(True)
 
     def highlightBlock(self, text):
@@ -73,7 +65,6 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
             for match in pattern.finditer(text):
                 self.setFormat(match.start(), match.end() - match.start(), format)
 
-        # Basic Multiline String highlighting logic (simplistic)
         self.setCurrentBlockState(0)
         
         in_string = False
@@ -81,7 +72,6 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
         if self.previousBlockState() == 1:
             in_string = True
             
-        # Very crude """ detection for walkthrough purposes
         idx = 0
         while idx < len(text):
             if text[idx:idx+3] == '"""' or text[idx:idx+3] == "'''":
@@ -105,36 +95,29 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
 
         self.highlightingRules = []
 
-        # Keys (strings before colon)
         keyFormat = QTextCharFormat()
-        keyFormat.setForeground(QColor("#61afef")) # Blue
+        keyFormat.setForeground(QColor("#2563eb"))
         self.highlightingRules.append((re.compile(r'"[^"]*"\s*:'), keyFormat))
 
-        # String values
         stringFormat = QTextCharFormat()
-        stringFormat.setForeground(QColor("#98c379")) # Green
+        stringFormat.setForeground(QColor("#16a34a"))
         self.highlightingRules.append((re.compile(r':\s*"[^"]*"'), stringFormat))
 
-        # Numbers
         numberFormat = QTextCharFormat()
-        numberFormat.setForeground(QColor("#d19a66")) # Orange
+        numberFormat.setForeground(QColor("#ea580c"))
         self.highlightingRules.append((re.compile(r'\b[0-9]+(\.[0-9]+)?\b'), numberFormat))
 
-        # Booleans / Null
         boolFormat = QTextCharFormat()
-        boolFormat.setForeground(QColor("#c678dd")) # Purple
+        boolFormat.setForeground(QColor("#7c3aed"))
         self.highlightingRules.append((re.compile(r'\b(true|false|null)\b'), boolFormat))
         
     def highlightBlock(self, text):
         for pattern, format in self.highlightingRules:
             for match in pattern.finditer(text):
-                # For keys, only highlight the string part, not the colon
                 if pattern.pattern == r'"[^"]*"\s*:':
-                    # Find where the quote ends to skip the colon
                     s = match.group()
                     idx = s.rfind('"') + 1
                     self.setFormat(match.start(), idx, format)
-                # For string values, only highlight the string part, not the colon
                 elif pattern.pattern == r':\s*"[^"]*"':
                     s = match.group()
                     idx = s.find('"')

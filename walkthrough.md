@@ -29,7 +29,7 @@ The pipeline: **parse → validate → extract AST features → analyze context 
 
 ### Neurosymbolic Engine Files
 
-| File | Purpose |
+| File | Purpose |  
 |------|---------|
 | `src/neurosymbolic/engine.py` | Confidence-gated fusion engine: ML summary + symbolic validation |
 | `src/neurosymbolic/reasoner.py` | Symbolic knowledge base: pattern-to-description rules and constraint solver |
