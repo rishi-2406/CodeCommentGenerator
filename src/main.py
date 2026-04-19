@@ -34,10 +34,12 @@ from .error_handler import format_error, ParserError
 from .ast_extractor import extract_features, features_to_dict
 from .context_analyzer import analyze_context, context_to_dict
 from .comment_generator import generate_comments, ml_generate_comments
+from .neurosymbolic.engine import neurosymbolic_generate_comments
 from .comment_attacher import attach_comments
 from .logger import PipelineLogger
 from .ir import build_ir, pretty_print_ir, serialize_ir
 from .analysis import build_cfg, run_dfa, detect_patterns
+from .security_analyzer import run_security_analysis, SecurityReport
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Print the pattern-analysis report (Week 8)")
     p.add_argument("--ml", action="store_true",
                    help="Use AST+NLP ML-based comment generation")
+    p.add_argument("--neurosymbolic", action="store_true",
+                   help="Use neurosymbolic (confidence-gated ML + symbolic) generation")
     p.add_argument("--train", action="store_true",
                    help="Train/retrain ML models and save reports, then exit")
     p.add_argument("--epochs", type=int, default=4,
@@ -86,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_ml: bool = False):
+def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_ml: bool = False, engine: str = "rule_based"):
     """
     Execute the full pipeline (Week 7–8 stages + Week 9 ML generation).
 
@@ -95,6 +99,7 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
         logger:         PipelineLogger instance.
         ast_model:      Optional ASTCommentModel for ML-based generation.
         strict_ml:      Require AST+NLP ML path when True (no rule fallback).
+        engine:         One of "rule_based", "ml", "neurosymbolic".
 
     Returns:
         (annotated_source, comments, module_features, context_graph,
@@ -112,10 +117,10 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
     # ── Stage 2: Validate ────────────────────────────────────────────
     logger.begin_stage("validate")
     val_errors = validate_ast(ast_tree)
-    warnings = [format_error(e) for e in val_errors]
+    val_warnings = [format_error(e) for e in val_errors]
     logger.end_stage(
         summary={"issues_found": len(val_errors)},
-        warnings=warnings,
+        warnings=val_warnings,
     )
 
     # ── Stage 3: Extract AST Features ────────────────────────────────
@@ -141,7 +146,14 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
 
     # ── Stage 5: Generate Comments ───────────────────────────────────
     logger.begin_stage("generate")
-    if ast_model is not None:
+    if engine == "neurosymbolic" and ast_model is not None:
+        comments = neurosymbolic_generate_comments(
+            module_features, context_graph, ast_model,
+            source_code=source_code,
+            strict_ml=strict_ml,
+        )
+        gen_engine = "neurosymbolic"
+    elif ast_model is not None:
         comments = ml_generate_comments(
             module_features, context_graph, ast_model,
             source_code=source_code,
@@ -188,8 +200,18 @@ def run_pipeline(filepath: str, logger: PipelineLogger, ast_model=None, strict_m
         "summary": analysis_report.summary,
     })
 
+    # ── Stage 9: Security Analysis ────────────────────────────────────────
+    logger.begin_stage("security")
+    security_report = run_security_analysis(module_features, context_graph, source_code)
+    logger.end_stage(summary={
+        "total_issues": security_report.total_issues,
+        "module_safe_pct": security_report.module_safe_pct,
+        "by_severity": security_report.by_severity,
+    })
+
     return (attach_result.annotated_source, comments, module_features,
-            context_graph, attach_result, ir_module, analysis_report)
+            context_graph, attach_result, ir_module, analysis_report,
+            security_report)
 
 
 def main():
@@ -248,14 +270,22 @@ def main():
     logger = PipelineLogger(input_file=filepath)
 
     print(f"\n{'='*55}")
-    print("  Code Comment Generation — Rule-Based + AST+NLP ML")
+    print("  Code Comment Generation — Rule-Based + AST+NLP ML + Neurosymbolic")
     print(f"{'='*55}")
     print(f"  Input : {filepath}")
 
-    # ── Load ML model if requested ────────────────────────────────────────
-    ast_model = None
-    if args.ml:
+    engine = "rule_based"
+    if args.neurosymbolic:
+        engine = "neurosymbolic"
+        print("  Mode  : Neurosymbolic (confidence-gated ML + symbolic fusion)")
+    elif args.ml:
+        engine = "ml"
         print("  Mode  : AST+NLP ML generation")
+    else:
+        print("  Mode  : Rule-Based generation")
+
+    ast_model = None
+    if args.ml or args.neurosymbolic:
         try:
             from .ml.trainer import load_ast_model
             ast_model = load_ast_model(output_dir=output_dir)
@@ -269,12 +299,10 @@ def main():
             print(f"  [error] Could not load AST+NLP model: {exc}")
             print("          Train first: python3 -m src.main --train")
             sys.exit(2)
-    else:
-        print("  Mode  : Rule-Based generation")
 
     try:
-        annotated, comments, mf, cg, attach_result, ir_module, analysis_report = \
-            run_pipeline(filepath, logger, ast_model=ast_model, strict_ml=args.ml)
+        annotated, comments, mf, cg, attach_result, ir_module, analysis_report, security_report = \
+            run_pipeline(filepath, logger, ast_model=ast_model, strict_ml=args.ml or args.neurosymbolic, engine=engine)
     except ParserError as e:
         print(f"\n{format_error(e)}")
         sys.exit(1)
@@ -314,6 +342,8 @@ def main():
     print(f"  Comments generated: {len(comments)}")
     print(f"  IR functions built: {len(ir_module.functions)}")
     print(f"  Analysis findings : {len(analysis_report.findings)}")
+    print(f"  Security issues   : {security_report.total_issues} "
+          f"({security_report.module_safe_pct}% safe)")
     print()
 
     for c in comments:

@@ -124,7 +124,3 @@ class PipelineLogger:
             f.write("\n".join(lines))
 
         return json_path, text_path
-
-
-# Type alias placeholder (Python 3.8 compat)
-Tuple_str = tuple

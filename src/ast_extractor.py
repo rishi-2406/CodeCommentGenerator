@@ -234,8 +234,7 @@ class FeatureExtractor(ast.NodeVisitor):
         branches = _count_branches(node.body)
         calls = _collect_calls(node.body)
 
-        # line count = end_lineno - lineno (Python 3.8+)
-        body_lines = getattr(node, 'end_lineno', node.lineno) - node.lineno
+        body_lines = max(1, getattr(node, 'end_lineno', node.lineno) - node.lineno)
 
         ff = FunctionFeature(
             node_id=node_id,

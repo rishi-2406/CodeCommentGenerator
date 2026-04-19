@@ -76,6 +76,17 @@ class _BlockBuilder:
         return self._block
 
 
+def _link_block(ir_func: IRFunction, from_label: str, to_label: str) -> None:
+    """Safely link two blocks by label (successor/predecessor edge)."""
+    src = ir_func.get_block(from_label)
+    dst = ir_func.get_block(to_label)
+    if src and dst:
+        if to_label not in src.successors:
+            src.successors.append(to_label)
+        if from_label not in dst.predecessors:
+            dst.predecessors.append(from_label)
+
+
 # ---------------------------------------------------------------------------
 # Function lowering
 # ---------------------------------------------------------------------------
@@ -107,6 +118,7 @@ def _lower_function(
 
     entry_block = entry.build()
     ir_func.blocks.append(entry_block)
+    prev_label = "entry"
 
     # ── 2. Variable assignment block ─────────────────────────────────────
     if fc and fc.variables:
@@ -124,11 +136,8 @@ def _lower_function(
                 )
         vars_block = assign_bb.build()
         ir_func.blocks.append(vars_block)
-        entry_block.successors.append("vars")
-        vars_block.predecessors.append("entry")
+        _link_block(ir_func, prev_label, "vars")
         prev_label = "vars"
-    else:
-        prev_label = "entry"
 
     # ── 3. Call block ────────────────────────────────────────────────────
     if ff.calls_made:
@@ -145,8 +154,7 @@ def _lower_function(
             )
         calls_block = calls_bb.build()
         ir_func.blocks.append(calls_block)
-        ir_func.get_block(prev_label).successors.append("calls")  # type: ignore[union-attr]
-        calls_block.predecessors.append(prev_label)
+        _link_block(ir_func, prev_label, "calls")
         prev_label = "calls"
 
     # ── 4. Loop blocks ──────────────────────────────────────────────────
@@ -180,8 +188,7 @@ def _lower_function(
         after_block = after_bb.build()
 
         # Wire edges
-        ir_func.get_block(prev_label).successors.append(loop_label)  # type: ignore[union-attr]
-        header_block.predecessors.append(prev_label)
+        _link_block(ir_func, prev_label, loop_label)
         header_block.successors  += [body_label, after_label]
         body_block.predecessors.append(loop_label)
         body_block.successors.append(loop_label)       # back-edge
@@ -231,8 +238,7 @@ def _lower_function(
         join_block = join_bb.build()
 
         # Wire edges
-        ir_func.get_block(prev_label).successors.append(f"branch_{j}_cond")  # type: ignore[union-attr]
-        cond_block.predecessors.append(prev_label)
+        _link_block(ir_func, prev_label, f"branch_{j}_cond")
         cond_block.successors   += [true_label, false_label]
         true_block.predecessors.append(f"branch_{j}_cond")
         true_block.successors.append(join_label)
@@ -256,9 +262,8 @@ def _lower_function(
     )
     exit_block = exit_bb.build()
 
-    ir_func.get_block(prev_label).successors.append("exit")  # type: ignore[union-attr]
-    exit_block.predecessors.append(prev_label)
     ir_func.blocks.append(exit_block)
+    _link_block(ir_func, prev_label, "exit")
 
     return ir_func
 

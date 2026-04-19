@@ -17,13 +17,13 @@ from src.gui.syntax_highlighter import PythonSyntaxHighlighter
 from src.ml.trainer import load_ast_model
 
 class GeneratorWorker(QThread):
-    finished = pyqtSignal(str, str, object) # success/error text, annotated_code, results_dict
+    finished = pyqtSignal(str, str, object)
     status = pyqtSignal(str)
     
-    def __init__(self, code_text, is_ml, output_dir):
+    def __init__(self, code_text, engine, output_dir):
         super().__init__()
         self.code_text = code_text
-        self.is_ml = is_ml
+        self.engine = engine
         self.output_dir = output_dir
         
     def run(self):
@@ -37,7 +37,7 @@ class GeneratorWorker(QThread):
             logger = PipelineLogger(input_file=tmp_in)
             
             ast_model = None
-            if self.is_ml:
+            if self.engine in ("ml", "neurosymbolic"):
                 self.status.emit("Loading AST+NLP ML model...")
                 try:
                     ast_model = load_ast_model(output_dir="outputs")
@@ -50,8 +50,10 @@ class GeneratorWorker(QThread):
                     raise RuntimeError(f"Failed to start ML mode: {e}") from e
             
             self.status.emit("Running pipeline...")
-            annotated, comments, mf, cg, attach_result, ir_module, analysis_report = \
-                run_pipeline(tmp_in, logger, ast_model=ast_model, strict_ml=self.is_ml)
+            annotated, comments, mf, cg, attach_result, ir_module, analysis_report, security_report = \
+                run_pipeline(tmp_in, logger, ast_model=ast_model, 
+                             strict_ml=(self.engine in ("ml", "neurosymbolic")),
+                             engine=self.engine)
                 
             # Optionally save file
             out_file = os.path.join(self.output_dir, "gui_annotated.py")
@@ -66,7 +68,8 @@ class GeneratorWorker(QThread):
                 "mf": mf,
                 "cg": cg,
                 "ir": ir_module,
-                "analysis": analysis_report
+                "analysis": analysis_report,
+                "security_report": security_report,
             }
             self.finished.emit("Success", annotated, results_dict)
         except Exception as e:
@@ -100,18 +103,28 @@ class GeneratorWorkspace(QWidget):
         engine_layout.setSpacing(8)
         
         self.btn_rule = QRadioButton("Rule-Based")
-        self.btn_ml = QRadioButton("ML-Based (AST+NLP)")
-        self.btn_ml.setChecked(True)
-        
+        self.btn_neuro = QRadioButton("Neurosymbolic")
+        self.btn_ml = QRadioButton("ML-Based")
+        self.btn_neuro.setChecked(True)
+
         self.engine_btn_group = QButtonGroup(self)
         self.engine_btn_group.addButton(self.btn_rule, 1)
-        self.engine_btn_group.addButton(self.btn_ml, 2)
-        
+        self.engine_btn_group.addButton(self.btn_neuro, 2)
+        self.engine_btn_group.addButton(self.btn_ml, 3)
+
         engine_layout.addWidget(self.btn_rule)
+        engine_layout.addWidget(self.btn_neuro)
         engine_layout.addWidget(self.btn_ml)
-        
+
         header_layout.addWidget(engine_group)
         header_layout.addStretch()
+
+        self.unsafe_label = QLabel("0% unsafe")
+        self.unsafe_label.setStyleSheet(
+            "color: #22c55e; font-weight: bold; font-size: 13px; "
+            "padding: 4px 10px; background: rgba(34,197,94,0.1); border-radius: 4px;"
+        )
+        header_layout.addWidget(self.unsafe_label)
         
         # Output Dir
         dir_layout = QHBoxLayout()
@@ -209,10 +222,15 @@ class GeneratorWorkspace(QWidget):
             QMessageBox.warning(self, "No Code", "Please pick a file or paste some code.")
             return
             
-        is_ml = self.btn_ml.isChecked()
-        out_dir = self.out_dir_input.text()
+        is_ml = self.btn_ml.isChecked() or self.btn_neuro.isChecked()
+        if self.btn_neuro.isChecked():
+            engine = "neurosymbolic"
+        elif self.btn_ml.isChecked():
+            engine = "ml"
+        else:
+            engine = "rule_based"
         
-        self.worker = GeneratorWorker(code, is_ml, out_dir)
+        self.worker = GeneratorWorker(code, engine, out_dir)
         self.worker.status.connect(lambda msg: self.generationStarted.emit()) # proxy
         self.worker.finished.connect(self.on_generation_finished)
         self.worker.start()
@@ -227,3 +245,27 @@ class GeneratorWorkspace(QWidget):
 
     def update_annotated_code(self, code):
         self.output_editor.setPlainText(code)
+
+    def update_unsafe_pct(self, security_report):
+        if security_report is None:
+            self.unsafe_label.setText("N/A")
+            self.unsafe_label.setStyleSheet(
+                "color: #94a3b8; font-weight: bold; font-size: 13px; "
+                "padding: 4px 10px; border-radius: 4px;"
+            )
+            return
+        unsafe_pct = round(100.0 - security_report.module_safe_pct, 1)
+        if unsafe_pct > 20:
+            color = "#ef4444"
+            bg = "rgba(239,68,68,0.1)"
+        elif unsafe_pct > 0:
+            color = "#eab308"
+            bg = "rgba(234,179,8,0.1)"
+        else:
+            color = "#22c55e"
+            bg = "rgba(34,197,94,0.1)"
+        self.unsafe_label.setText(f"{unsafe_pct}% unsafe")
+        self.unsafe_label.setStyleSheet(
+            f"color: {color}; font-weight: bold; font-size: 13px; "
+            f"padding: 4px 10px; background: {bg}; border-radius: 4px;"
+        )

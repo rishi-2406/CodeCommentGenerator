@@ -207,10 +207,10 @@ def analyze_context(
     Args:
         module_features: Output of ast_extractor.extract_features()
         ast_tree: The original parsed AST (for walking function bodies)
-        source_code: Raw source string (unused here, kept for API compatibility)
+        source_code: Raw source string (used for security pattern detection)
 
     Returns:
-        ContextGraph with per-function contexts and call graph
+        ContextGraph with per-function contexts, call graph, and security issues
     """
     # Build a map: function name -> AST FunctionDef node
     func_nodes: Dict[str, ast.FunctionDef] = {}
@@ -245,12 +245,15 @@ def analyze_context(
 
         # Basic Security Analysis
         security_issues = []
+        source_lines = source_code.splitlines() if source_code else []
         for call in ff.calls_made:
             if call in ("eval", "exec", "compile"):
                 security_issues.append(f"Uses dangerous builtin '{call}'")
-            elif "subprocess" in call and "shell=True" in source_code[ff.lineno-1:ff.lineno+ff.body_lines]:
-                # Heuristic: If subprocess is called and shell=True appears in body
-                security_issues.append("Potential shell injection risk (subprocess with shell=True)")
+            elif "subprocess" in call:
+                body_lines = source_lines[ff.lineno - 1:ff.lineno + ff.body_lines]
+                body_text = "\n".join(body_lines)
+                if "shell=True" in body_text:
+                    security_issues.append("Potential shell injection risk (subprocess with shell=True)")
             elif "md5" in call or "sha1" in call:
                 security_issues.append(f"Uses weak cryptographic hash function '{call}'")
 

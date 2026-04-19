@@ -74,7 +74,6 @@ _VERB_MAP = {
     "remove":    "Removes",
     "delete":    "Deletes",
     "clear":     "Clears",
-    "reset":     "Resets",
     "pop":       "Pops",
     "calc":      "Calculates",
     "calculate": "Calculates",
@@ -167,7 +166,6 @@ _VERB_MAP = {
     "decompress":"Decompresses",
     "hash":      "Hashes",
     "sign":      "Signs",
-    "verify":    "Verifies",
     "authenticate": "Authenticates",
     "authorize": "Authorizes",
     "tokenize":  "Tokenizes",
@@ -192,36 +190,20 @@ _VERB_MAP = {
 
 
 def _sanitize_docstring_content(text: str) -> str:
-    """
-    Sanitize text for safe inclusion in docstrings.
-    
-    Prevents issues like:
-    - Triple quotes appearing at line starts after wrapping
-    - Raw string prefixes (r""", u""", etc.) breaking docstring syntax
-    - Escaped characters causing parsing issues
-    
-    Args:
-        text: Raw text content to include in docstring
-        
-    Returns:
-        Sanitized text safe for docstring inclusion
-    """
     if not text:
         return text
-    
+
+    # Remove raw string prefixes that might appear at line starts
+    text = re.sub(r'^([rubfRUBF]+)"""', r'"\1"', text, flags=re.MULTILINE)
+    text = re.sub(r"^([rubfRUBF]+)'''", r"'\1'", text, flags=re.MULTILINE)
+
     # Replace triple quotes with single quotes to prevent docstring breaks
     text = text.replace('"""', "''")
     text = text.replace("'''", "''")
-    
-    # Remove raw string prefixes that might appear at line starts
-    # This handles patterns like "r"""", "u"""", "f"""", "b"""", "br"""", etc.
-    text = re.sub(r'^([rubfRUBF]+)"""', r'"\1"', text, flags=re.MULTILINE)
-    text = re.sub(r'^([rubfRUBF]+)\'\'\'', r"'\1'", text, flags=re.MULTILINE)
-    
-    # Escape any remaining problematic sequences
+
     # Prevent lines from starting with ''' or """
     text = re.sub(r'^\s*("""|\'\'\')', r'', text, flags=re.MULTILINE)
-    
+
     return text
 
 
@@ -717,7 +699,6 @@ def ml_generate_comments(
         fc = fc_map.get(ff.name)
 
         if not ff.has_docstring:
-            # Extract raises from source (only AST structural info used)
             raises: List[str] = []
             if source_code:
                 try:
@@ -728,21 +709,12 @@ def ml_generate_comments(
 
             doc_text = None
             try:
-                # KEY: T5 model receives AST feature OBJECTS, not source
                 raw_text, confidence = ast_model.generate(ff, fc, raises)
                 summary = _sanitize_docstring_content(raw_text.strip().strip('"""').strip())
-                
-                # We strictly disable rule-based components like Args/Returns blocks
-                # and only append ML summary plus any Security Warnings
-                lines = ['"""', summary]
-                if fc and getattr(fc, 'security_issues', None):
-                    lines.append("")
-                    lines.append("Security Warnings:")
-                    for issue in fc.security_issues:
-                        issue = _sanitize_docstring_content(issue)
-                        lines.append(f"    - {issue}")
-                lines.append('"""')
-                doc_text = "\n".join(lines)
+
+                doc_text = build_full_docstring(
+                    summary, ff, fc, source_code, raises
+                )
             except Exception as exc:
                 if strict_ml:
                     raise RuntimeError(
@@ -798,8 +770,9 @@ def build_full_docstring(
     noun_phrase = _humanize(ff.name)
     real_params = [p for p in ff.params if p.name not in ("self", "cls")]
 
-    # Sanitize the summary from ML model
-    summary = _sanitize_docstring_content(summary if summary else _humanize_verb(ff.name))
+    tokens = _meaningful_tokens(ff.name)
+    fallback_summary = f"{_pick_verb(tokens)} {noun_phrase}."
+    summary = _sanitize_docstring_content(summary if summary else fallback_summary)
     lines = ['"""', summary]
 
     # Args
